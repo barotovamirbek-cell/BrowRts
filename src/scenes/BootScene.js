@@ -6,11 +6,11 @@ export class BootScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.spritesheet("tinyDungeonTiles", "assets/kenney/tiny-dungeon/Tilemap/tilemap.png", {
+    this.load.spritesheet("tinyDungeonTiles", "assets/kenney/tiny-dungeon/Tilemap/tilemap_packed.png", {
       frameWidth: 16,
       frameHeight: 16
     });
-    this.load.spritesheet("tinyBattleTiles", "assets/kenney/tiny-battle/Tilemap/tilemap.png", {
+    this.load.spritesheet("tinyBattleTiles", "assets/kenney/tiny-battle/Tilemap/tilemap_packed.png", {
       frameWidth: 16,
       frameHeight: 16
     });
