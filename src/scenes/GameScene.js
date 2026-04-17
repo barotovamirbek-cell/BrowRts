@@ -345,31 +345,103 @@ export class GameScene extends Phaser.Scene {
   buildCommandButtons() {
     this.ui.buttons.forEach((button) => button.container.destroy());
     this.ui.buttons = [];
-    const defs = [
-      { key: "build-farm", label: "Farm", type: "build", value: "farm" },
-      { key: "build-barracks", label: "Barracks", type: "build", value: "barracks" },
-      { key: "build-tower", label: "Tower", type: "build", value: "tower" },
-      { key: "train-worker", label: "Worker", type: "train", value: "worker" },
-      { key: "train-swordsman", label: "Swordsman", type: "train", value: "swordsman" },
-      { key: "train-archer", label: "Archer", type: "train", value: "archer" },
-      { key: "cancel", label: "Cancel", type: "cancel", value: null }
-    ];
-
-    defs.forEach((def, index) => {
-      const x = 390 + (index % 4) * 148;
-      const y = this.scale.height - 136 + Math.floor(index / 4) * 58;
-      const bg = this.add.rectangle(0, 0, 132, 42, 0x2a241e, 0.95).setStrokeStyle(2, 0x7d6f5c, 0.9);
-      const text = this.add.text(0, 0, def.label, { fontSize: "16px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
-      const container = this.add.container(x, y, [bg, text]).setVisible(false).setScrollFactor(0).setDepth(2000);
-      container.setSize(132, 42);
+    for (let index = 0; index < 9; index += 1) {
+      const bg = this.add.rectangle(0, 0, 132, 46, 0x1a1612, 0.9).setStrokeStyle(2, 0x554a3c, 0.9);
+      const title = this.add.text(0, -7, "", { fontSize: "15px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
+      const sub = this.add.text(0, 11, "", { fontSize: "11px", color: "#bdb5a4", align: "center" }).setOrigin(0.5);
+      const container = this.add.container(0, 0, [bg, title, sub]).setScrollFactor(0).setDepth(2000);
+      container.setSize(132, 46);
+      container.setInteractive(new Phaser.Geom.Rectangle(-66, -23, 132, 46), Phaser.Geom.Rectangle.Contains);
+      const button = { container, bg, title, sub, action: null };
       container
-        .setInteractive(new Phaser.Geom.Rectangle(-66, -21, 132, 42), Phaser.Geom.Rectangle.Contains)
-        .on("pointerdown", (_pointer, _x, _y, event) => {
+        .on("pointerover", () => {
+          if (!button.action) return;
+          button.bg.setStrokeStyle(2, 0xf0d9a3, 0.95);
+        })
+        .on("pointerout", () => {
+          this.refreshButtons();
+        })
+        .on("pointerdown", (_pointer, _lx, _ly, event) => {
           event?.stopPropagation?.();
-          this.handleCommandButton(def);
+          if (!button.action) return;
+          this.handleCommandButton(button.action);
         });
-      this.ui.buttons.push({ ...def, container, bg, text });
+      this.ui.buttons.push(button);
+    }
+
+    this.layoutCommandButtons();
+  }
+
+  layoutCommandButtons() {
+    const cols = 3;
+    const rows = 3;
+    const cellW = 132;
+    const cellH = 46;
+    const gapX = 12;
+    const gapY = 10;
+    const gridW = cols * cellW + (cols - 1) * gapX;
+    const leftLimit = 390;
+    const rightLimit = this.scale.width - 228;
+    const availableLeft = Math.max(leftLimit, Math.floor((this.scale.width - gridW) / 2));
+    const maxLeft = Math.max(leftLimit, rightLimit - gridW);
+    const left = clamp(availableLeft, leftLimit, maxLeft);
+    const top = this.scale.height - 154;
+
+    this.ui.buttons.forEach((button, index) => {
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      button.container.setPosition(
+        left + col * (cellW + gapX) + cellW / 2,
+        top + row * (cellH + gapY) + cellH / 2
+      );
     });
+  }
+
+  getCommandActions() {
+    const actions = [];
+    const hasWorker = this.state.selected.some((entry) => entry.kind === "unit" && entry.type === "worker");
+    const hasUnits = this.state.selected.some((entry) => entry.kind === "unit");
+    const building = this.getSingleSelectedBuilding();
+
+    if (this.state.buildMode !== null) {
+      actions.push({ key: "cancel", label: "Cancel", type: "cancel", value: null, costText: "" });
+    }
+
+    if (hasWorker) {
+      actions.push({ key: "build-farm", label: "Farm", type: "build", value: "farm", costText: formatCost(BUILDING_DEFS.farm.cost) });
+      actions.push({
+        key: "build-barracks",
+        label: "Barracks",
+        type: "build",
+        value: "barracks",
+        costText: formatCost(BUILDING_DEFS.barracks.cost)
+      });
+      actions.push({ key: "build-tower", label: "Tower", type: "build", value: "tower", costText: formatCost(BUILDING_DEFS.tower.cost) });
+    }
+
+    if (building?.completed) {
+      if (building.def.canTrain?.includes("worker")) {
+        actions.push({ key: "train-worker", label: "Worker", type: "train", value: "worker", costText: formatCost(UNIT_DEFS.worker.cost) });
+      }
+      if (building.def.canTrain?.includes("swordsman")) {
+        actions.push({
+          key: "train-swordsman",
+          label: "Swordsman",
+          type: "train",
+          value: "swordsman",
+          costText: formatCost(UNIT_DEFS.swordsman.cost)
+        });
+      }
+      if (building.def.canTrain?.includes("archer")) {
+        actions.push({ key: "train-archer", label: "Archer", type: "train", value: "archer", costText: formatCost(UNIT_DEFS.archer.cost) });
+      }
+    }
+
+    if (hasUnits) {
+      actions.push({ key: "stop", label: "Stop", type: "stop", value: null, costText: "" });
+    }
+
+    return actions.slice(0, 9);
   }
 
   bindResize() {
@@ -388,7 +460,7 @@ export class GameScene extends Phaser.Scene {
       this.ui.minimapFrame.setPosition(width - 208, height - 146);
       this.ui.minimapHitbox.setPosition(width - 208, height - 146);
       this.ui.result.setPosition(width / 2, 80);
-      this.buildCommandButtons();
+      this.layoutCommandButtons();
     });
   }
 
@@ -1186,6 +1258,15 @@ export class GameScene extends Phaser.Scene {
       this.cancelBuildMode();
       return;
     }
+    if (def.type === "stop") {
+      const unitIds = this.state.selected.filter((entry) => entry.kind === "unit").map((entry) => entry.id);
+      if (unitIds.length === 0) {
+        this.showMessage("Select units first.");
+        return;
+      }
+      this.issueCommands([{ kind: "stop", unitIds }]);
+      return;
+    }
     if (def.type === "build") {
       if (!this.state.selected.some((entry) => entry.kind === "unit" && entry.type === "worker")) {
         this.showMessage("Select at least one Worker to build.");
@@ -1201,6 +1282,7 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       this.issueCommands([{ kind: "train", buildingId: building.id, unitType: def.value }]);
+      return;
     }
   }
 
@@ -1485,26 +1567,36 @@ export class GameScene extends Phaser.Scene {
   }
 
   refreshButtons() {
-    const hasWorker = this.state.selected.some((entry) => entry.kind === "unit" && entry.type === "worker");
-    const building = this.getSingleSelectedBuilding();
-    this.ui.buttons.forEach((button) => {
-      let visible = false;
-      let subtitle = "";
-      if (button.type === "build") {
-        visible = hasWorker;
-        subtitle = formatCost(BUILDING_DEFS[button.value].cost);
-      } else if (button.type === "train") {
-        visible = Boolean(building?.completed && building.def.canTrain?.includes(button.value));
-        subtitle = formatCost(UNIT_DEFS[button.value].cost);
-      } else if (button.type === "cancel") {
-        visible = this.state.buildMode !== null;
-      }
-      button.container.setVisible(visible);
+    const actions = this.getCommandActions();
+    this.ui.buttons.forEach((button, index) => {
+      const action = actions[index] ?? null;
+      const enabled = Boolean(action);
+      button.action = action;
+      button.container.setVisible(true);
       if (button.container.input) {
-        button.container.input.enabled = visible;
+        button.container.input.enabled = enabled;
+        button.container.input.cursor = enabled ? "pointer" : "default";
       }
-      button.text.setText(subtitle ? `${button.label}\n${subtitle}` : button.label);
-      button.text.setFontSize(subtitle ? "13px" : "16px");
+
+      if (!enabled) {
+        button.bg.setFillStyle(0x191410, 0.55);
+        button.bg.setStrokeStyle(2, 0x3c3328, 0.6);
+        button.title.setText("").setColor("#6c675d");
+        button.sub.setText("").setColor("#5b564c");
+        return;
+      }
+
+      const paletteByType = {
+        build: { fill: 0x1a2116, stroke: 0x7c9a65, title: "#edf4e2", sub: "#b8c9a7" },
+        train: { fill: 0x1d1914, stroke: 0xa88c63, title: "#f4e8d2", sub: "#c9b290" },
+        cancel: { fill: 0x241613, stroke: 0xb87266, title: "#f4d9d6", sub: "#c89b95" },
+        stop: { fill: 0x151b24, stroke: 0x6e93be, title: "#dde8f5", sub: "#a8bfd7" }
+      };
+      const palette = paletteByType[action.type] ?? paletteByType.train;
+      button.bg.setFillStyle(palette.fill, 0.92);
+      button.bg.setStrokeStyle(2, palette.stroke, 0.95);
+      button.title.setText(action.label).setColor(palette.title);
+      button.sub.setText(action.costText ?? "").setColor(palette.sub);
     });
   }
 
