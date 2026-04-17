@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { FACTION_DEFS, FACTION_ORDER } from "../game/factions.js";
 import { NetClient } from "../network/Client.js";
+import { loginWithCustomId } from "../network/PlayFabClient.js";
 
 export class MenuScene extends Phaser.Scene {
   constructor() {
@@ -12,7 +13,10 @@ export class MenuScene extends Phaser.Scene {
     this.pendingLobby = null;
     this.selectedFaction = "kingdom";
     this.playerName = `Commander ${Phaser.Math.Between(10, 99)}`;
-    this.serverUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:2567`;
+    this.serverUrl =
+      import.meta.env.VITE_MULTIPLAYER_WS_URL ||
+      `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:2567`;
+    this.playFabIdentity = null;
 
     const { width, height } = this.scale;
     const bg = this.add.graphics();
@@ -33,9 +37,33 @@ export class MenuScene extends Phaser.Scene {
       color: "#b9b1a4"
     });
 
+    this.profileText = this.add.text(56, 138, "Profile: local guest", {
+      fontSize: "17px",
+      color: "#d8cbaa"
+    });
+
     this.statusText = this.add.text(56, height - 52, "", { fontSize: "18px", color: "#f8d07a" });
     this.createFactionCards();
     this.createActionButtons();
+    this.initializeIdentity();
+  }
+
+  async initializeIdentity() {
+    this.statusText.setText("Signing in...");
+    try {
+      this.playFabIdentity = await loginWithCustomId(this.playerName);
+      this.playerName = this.playFabIdentity.displayName || this.playerName;
+      this.profileText.setText(
+        this.playFabIdentity.enabled
+          ? `Profile: ${this.playerName}  |  PlayFab ${this.playFabIdentity.playFabId}`
+          : `Profile: local guest  |  set VITE_PLAYFAB_TITLE_ID to enable PlayFab`
+      );
+      this.statusText.setText(this.playFabIdentity.enabled ? "PlayFab connected." : "PlayFab disabled. Running local profile.");
+    } catch (error) {
+      this.profileText.setText("Profile: local guest  |  PlayFab login failed");
+      this.statusText.setText("PlayFab login failed. Continuing with local profile.");
+      console.error(error);
+    }
   }
 
   createFactionCards() {

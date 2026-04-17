@@ -26,6 +26,17 @@ Install dependencies:
 npm install
 ```
 
+Configure environment:
+
+```bash
+copy .env.example .env
+```
+
+Then set:
+
+- `VITE_PLAYFAB_TITLE_ID` to your PlayFab title id
+- `VITE_MULTIPLAYER_WS_URL` if your WebSocket server is not local
+
 Client only:
 
 ```bash
@@ -82,3 +93,20 @@ Important:
 - multiplayer needs a separately running WebSocket server
 
 If you want online multiplayer on the public site, deploy `server/server.js` on a real Node host and point the client to that WebSocket URL.
+
+## PlayFab
+
+The client now supports PlayFab sign-in using the official client endpoint:
+
+- `Client/LoginWithCustomID`
+
+This gives the game a persistent player identity layer. It is useful for:
+
+- profile identity
+- future cloud save / stats
+- future lobby and matchmaking migration
+
+Important:
+
+- your PlayFab `Title ID` is safe to expose in the client
+- your PlayFab `Secret Key` must never be put in the browser
