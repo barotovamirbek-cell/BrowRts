@@ -30,6 +30,8 @@ npm run build
 ```
 
 Для GitHub Pages проект уже настроен с `base: "/BrowRts/"`.
+Если GitHub Pages упрямо отдает не тот артефакт, можно публиковать готовую сборку из папки `docs/`:
+`Settings -> Pages -> Deploy from a branch -> main -> /docs`.
 
 Локальный адрес dev-сервера по умолчанию: `http://127.0.0.1:5173/`
 
