@@ -34,12 +34,12 @@ export class MenuScene extends Phaser.Scene {
       );
     }
 
-    this.add.text(54, 42, "Ironfront", { fontFamily: "Georgia", fontSize: "54px", color: "#f3dfb6" });
-    this.add.text(56, 106, "Four factions. Solo skirmish or WebSocket multiplayer.", {
+    this.titleText = this.add.text(54, 42, "Ironfront", { fontFamily: "Georgia", fontSize: "54px", color: "#f3dfb6" });
+    this.subtitleText = this.add.text(56, 106, "Four factions. Solo skirmish or WebSocket multiplayer.", {
       fontSize: "18px",
       color: "#b9b1a4"
     });
-    this.add.text(
+    this.publicHintText = this.add.text(
       56,
       736,
       this.isPublicSite
@@ -60,7 +60,36 @@ export class MenuScene extends Phaser.Scene {
     this.createProfileControls();
     this.createHtmlInputs();
     this.events.once("shutdown", () => this.destroyHtmlInputs());
+    this.playIntro();
     this.initializeIdentity();
+  }
+
+  playIntro() {
+    const staged = [
+      this.titleText,
+      this.subtitleText,
+      this.profileText,
+      this.publicHintText,
+      ...this.factionCards.flatMap((card) => [card.panel, card.title, card.motto, card.stats]),
+      this.lobbyRoomText,
+      this.lobbyPlayersText,
+      this.startMatchButton.startBox,
+      this.startMatchButton.startText,
+      this.renameButton.box,
+      this.renameButton.text
+    ];
+    staged.forEach((item, index) => {
+      item.setAlpha(0);
+      item.y += 10;
+      this.tweens.add({
+        targets: item,
+        alpha: 1,
+        y: item.y - 10,
+        duration: 320,
+        delay: 40 + index * 18,
+        ease: "Cubic.easeOut"
+      });
+    });
   }
 
   async initializeIdentity() {
