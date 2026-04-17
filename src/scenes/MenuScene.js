@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { FACTION_DEFS, FACTION_ORDER } from "../game/factions.js";
 import { NetClient } from "../network/Client.js";
-import { loginWithCustomId } from "../network/PlayFabClient.js";
+import { loginWithCustomId, updateUserTitleDisplayName } from "../network/PlayFabClient.js";
 
 export class MenuScene extends Phaser.Scene {
   constructor() {
@@ -45,6 +45,7 @@ export class MenuScene extends Phaser.Scene {
     this.statusText = this.add.text(56, height - 52, "", { fontSize: "18px", color: "#f8d07a" });
     this.createFactionCards();
     this.createActionButtons();
+    this.createProfileControls();
     this.initializeIdentity();
   }
 
@@ -124,6 +125,43 @@ export class MenuScene extends Phaser.Scene {
       const text = this.add.text(224, action.y + 23, action.label, { fontSize: "20px", color: "#f4efe2" }).setOrigin(0.5);
       box.setInteractive({ useHandCursor: true }).on("pointerdown", action.handler);
     });
+  }
+
+  createProfileControls() {
+    const box = this.add.rectangle(430, 132, 190, 38, 0x231c17, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
+    const text = this.add.text(525, 151, "Rename Profile", { fontSize: "17px", color: "#f4efe2" }).setOrigin(0.5);
+    box.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.renameProfile());
+    this.renameButton = { box, text };
+  }
+
+  async renameProfile() {
+    const nextName = window.prompt("New commander name?", this.playerName)?.trim();
+    if (!nextName) {
+      return;
+    }
+    if (nextName.length < 3 || nextName.length > 25) {
+      this.statusText.setText("Name must be 3 to 25 characters.");
+      return;
+    }
+
+    if (!this.playFabIdentity?.enabled) {
+      this.playerName = nextName;
+      this.profileText.setText(`Profile: ${this.playerName}  |  local guest`);
+      this.statusText.setText("Local profile renamed.");
+      return;
+    }
+
+    this.statusText.setText("Updating PlayFab display name...");
+    try {
+      const result = await updateUserTitleDisplayName(this.playFabIdentity.sessionTicket, nextName);
+      this.playerName = result.DisplayName || nextName;
+      this.playFabIdentity.displayName = this.playerName;
+      this.profileText.setText(`Profile: ${this.playerName}  |  PlayFab ${this.playFabIdentity.playFabId}`);
+      this.statusText.setText("PlayFab profile updated.");
+    } catch (error) {
+      this.statusText.setText("Could not update PlayFab display name.");
+      console.error(error);
+    }
   }
 
   async prepareNetwork() {

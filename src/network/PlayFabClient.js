@@ -52,3 +52,32 @@ export async function loginWithCustomId(displayName) {
     sessionTicket: result.SessionTicket
   };
 }
+
+async function callClientApi(path, sessionTicket, body) {
+  const response = await fetch(`https://${TITLE_ID}.playfabapi.com/Client/${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Authorization": sessionTicket
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(error || `${path} failed`);
+  }
+
+  const data = await response.json();
+  return data.data;
+}
+
+export async function updateUserTitleDisplayName(sessionTicket, displayName) {
+  if (!TITLE_ID) {
+    return { DisplayName: displayName };
+  }
+
+  return callClientApi("UpdateUserTitleDisplayName", sessionTicket, {
+    DisplayName: displayName
+  });
+}
