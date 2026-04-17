@@ -65,15 +65,26 @@ export class GameScene extends Phaser.Scene {
 
     const river = this.add.graphics();
     river.fillStyle(0x244d63, 0.42);
-    river.beginPath();
-    river.moveTo(420, 0);
-    river.quadraticCurveTo(820, 420, 740, 950);
-    river.quadraticCurveTo(680, 1450, 980, 2200);
-    river.lineTo(1230, 2200);
-    river.quadraticCurveTo(840, 1460, 970, 920);
-    river.quadraticCurveTo(1090, 380, 760, 0);
-    river.closePath();
-    river.fillPath();
+    river.fillPoints(
+      [
+        new Phaser.Geom.Point(420, 0),
+        new Phaser.Geom.Point(560, 120),
+        new Phaser.Geom.Point(700, 360),
+        new Phaser.Geom.Point(740, 640),
+        new Phaser.Geom.Point(720, 980),
+        new Phaser.Geom.Point(760, 1320),
+        new Phaser.Geom.Point(860, 1740),
+        new Phaser.Geom.Point(980, 2200),
+        new Phaser.Geom.Point(1230, 2200),
+        new Phaser.Geom.Point(1120, 1780),
+        new Phaser.Geom.Point(1010, 1360),
+        new Phaser.Geom.Point(970, 920),
+        new Phaser.Geom.Point(1020, 560),
+        new Phaser.Geom.Point(940, 250),
+        new Phaser.Geom.Point(760, 0)
+      ],
+      true
+    );
 
     this.worldLayer = this.add.container();
     this.resourceLayer = this.add.container();
