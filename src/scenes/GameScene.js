@@ -415,25 +415,31 @@ export class GameScene extends Phaser.Scene {
       home: Phaser.Input.Keyboard.KeyCodes.H
     });
 
-    this.dragSelect = { active: false, start: new Phaser.Math.Vector2(), end: new Phaser.Math.Vector2() };
+    this.dragSelect = { active: false, button: null, pointerId: null, start: new Phaser.Math.Vector2(), end: new Phaser.Math.Vector2() };
 
     this.input.on("pointerdown", (pointer) => {
       if (this.isPointerOverMinimap(pointer)) {
         return;
       }
 
-      if (pointer.leftButtonDown()) {
+      const button = pointer.event?.button;
+      const isLeft = button === 0 || pointer.leftButtonDown();
+      const isRight = button === 2 || pointer.rightButtonDown();
+
+      if (isLeft) {
         const worldPoint = pointer.positionToCamera(this.cameras.main);
         if (this.state.buildMode) {
           this.tryPlaceBuilding(worldPoint);
           return;
         }
         this.dragSelect.active = true;
+        this.dragSelect.button = 0;
+        this.dragSelect.pointerId = pointer.id;
         this.dragSelect.start.set(worldPoint.x, worldPoint.y);
         this.dragSelect.end.set(worldPoint.x, worldPoint.y);
       }
 
-      if (pointer.rightButtonDown()) {
+      if (isRight) {
         this.handleRightClick(pointer.positionToCamera(this.cameras.main));
       }
     });
@@ -452,7 +458,19 @@ export class GameScene extends Phaser.Scene {
       if (!this.dragSelect.active) {
         return;
       }
+      if (this.dragSelect.button !== 0) {
+        this.dragSelect.active = false;
+        this.dragSelect.button = null;
+        this.dragSelect.pointerId = null;
+        return;
+      }
+      if (this.dragSelect.pointerId !== null && pointer.id !== this.dragSelect.pointerId) {
+        return;
+      }
+
       this.dragSelect.active = false;
+      this.dragSelect.button = null;
+      this.dragSelect.pointerId = null;
       const rect = makeSelectionRect(this.dragSelect.start, this.dragSelect.end);
       const withShift = Boolean(pointer.event?.shiftKey);
       if (rect.width < 10 && rect.height < 10) {
