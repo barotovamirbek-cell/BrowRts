@@ -11,37 +11,30 @@ const SPAWNS = [
 ];
 
 const UNIT_VISUALS = {
-  worker: { columns: [4, 5], attackColumns: [6, 7], scale: 2.35 },
-  swordsman: { columns: [8, 9], attackColumns: [10, 11], scale: 2.35 },
-  archer: { columns: [12, 13], attackColumns: [14, 15], scale: 2.35 }
-};
-
-const FACTION_UNIT_ROWS = {
-  kingdom: 7,
-  wildkin: 8,
-  ember: 10,
-  dusk: 11
+  worker: { idle: [106], move: [106, 107], attack: [107], scale: 2.2 },
+  swordsman: { idle: [107], move: [107, 106], attack: [161], scale: 2.2 },
+  archer: { idle: [178], move: [178, 179], attack: [179], scale: 2.2 }
 };
 
 const FACTION_BUILDING_BASE = {
-  kingdom: 16,
-  wildkin: 24,
-  ember: 32,
-  dusk: 40
+  kingdom: 8,
+  wildkin: 26,
+  dusk: 44,
+  ember: 62
 };
 
 const BUILDING_FRAME_OFFSETS = {
-  townhall: 6,
-  farm: 1,
+  townhall: 2,
+  farm: 7,
   barracks: 3,
-  tower: 7
+  tower: 5
 };
 
-const TERRAIN_DECOR_FRAMES = [96, 97, 98, 99, 100, 101, 102, 103];
+const TERRAIN_DECOR_FRAMES = [1, 2, 94, 95, 112];
 
 const RESOURCE_VISUALS = {
-  wood: { frame: 96, scale: 2.25, tint: 0xb9d4a3, shadowScale: [1.1, 0.82] },
-  gold: { frame: 104, scale: 2.25, tint: 0xf6d879, shadowScale: [1.25, 0.85] }
+  wood: { frame: 112, scale: 2.3, shadowScale: [1.05, 0.82] },
+  gold: { frame: 5, scale: 2.3, shadowScale: [1.25, 0.85] }
 };
 
 export class GameScene extends Phaser.Scene {
@@ -97,13 +90,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   getUnitFrames(unitType, factionKey) {
-    const unitVisual = UNIT_VISUALS[unitType];
-    const row = FACTION_UNIT_ROWS[factionKey] ?? FACTION_UNIT_ROWS.kingdom;
-    const base = row * 16;
+    const unitVisual = UNIT_VISUALS[unitType] ?? UNIT_VISUALS.worker;
     return {
-      idle: unitVisual.columns.map((column) => base + column),
-      move: unitVisual.columns.map((column) => base + column),
-      attack: unitVisual.attackColumns.map((column) => base + column),
+      idle: [...unitVisual.idle],
+      move: [...unitVisual.move],
+      attack: [...unitVisual.attack],
       scale: unitVisual.scale
     };
   }
@@ -239,8 +230,8 @@ export class GameScene extends Phaser.Scene {
         Phaser.Utils.Array.GetRandom(TERRAIN_DECOR_FRAMES)
       );
       decor
-        .setScale(Phaser.Math.FloatBetween(1.4, 2.4))
-        .setAlpha(Phaser.Math.FloatBetween(0.3, 0.62))
+        .setScale(Phaser.Math.FloatBetween(1.9, 2.8))
+        .setAlpha(Phaser.Math.FloatBetween(0.2, 0.4))
         .setAngle(Phaser.Math.Between(0, 360));
       this.overlayLayer.add(decor);
     }
@@ -471,7 +462,7 @@ export class GameScene extends Phaser.Scene {
       .setScale(visual.shadowScale[0], visual.shadowScale[1])
       .setAlpha(0.22)
       .setTint(0x000000);
-    const sprite = this.add.image(x, y, "tinyBattleTiles", visual.frame).setScale(visual.scale).setTint(visual.tint);
+    const sprite = this.add.image(x, y, "tinyBattleTiles", visual.frame).setScale(visual.scale);
     this.resourceLayer.add([shadow, sprite]);
     const node = { id: this.state.nextId++, kind: "resource", type, x, y, amount, sprite, shadow, radius: type === "gold" ? 30 : 26 };
     sprite.setData("entity", node);
