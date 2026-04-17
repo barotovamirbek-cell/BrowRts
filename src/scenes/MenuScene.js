@@ -17,6 +17,8 @@ export class MenuScene extends Phaser.Scene {
       import.meta.env.VITE_MULTIPLAYER_WS_URL ||
       `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:2567`;
     this.playFabIdentity = null;
+    this.lobbyState = null;
+    this.isLobbyHost = false;
 
     const { width, height } = this.scale;
     const bg = this.add.graphics();
@@ -42,10 +44,13 @@ export class MenuScene extends Phaser.Scene {
       color: "#d8cbaa"
     });
 
+    this.createMultiplayerPanel(width, height);
     this.statusText = this.add.text(56, height - 52, "", { fontSize: "18px", color: "#f8d07a" });
     this.createFactionCards();
     this.createActionButtons();
     this.createProfileControls();
+    this.createHtmlInputs();
+    this.events.once("shutdown", () => this.destroyHtmlInputs());
     this.initializeIdentity();
   }
 
@@ -127,6 +132,82 @@ export class MenuScene extends Phaser.Scene {
     });
   }
 
+  createMultiplayerPanel(width, height) {
+    this.add.rectangle(width - 372, 92, 320, 320, 0x171411, 0.9).setOrigin(0).setStrokeStyle(2, 0x6f5c45, 0.95);
+    this.add.text(width - 350, 112, "Multiplayer Lobby", {
+      fontFamily: "Georgia",
+      fontSize: "28px",
+      color: "#f0dfb8"
+    });
+    this.add.text(width - 350, 150, "Name", { fontSize: "15px", color: "#b9b1a4" });
+    this.add.text(width - 350, 216, "Room Code", { fontSize: "15px", color: "#b9b1a4" });
+
+    this.lobbyRoomText = this.add.text(width - 350, 272, "Room: none", { fontSize: "18px", color: "#f4efe2" });
+    this.lobbyPlayersText = this.add.text(width - 350, 308, "Players:\n-", {
+      fontSize: "16px",
+      color: "#dfd9cf",
+      lineSpacing: 7,
+      wordWrap: { width: 260 }
+    });
+
+    const startBox = this.add.rectangle(width - 350, 392, 260, 42, 0x2c241a, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
+    const startText = this.add.text(width - 220, 413, "Start Match", { fontSize: "19px", color: "#f4efe2" }).setOrigin(0.5);
+    startBox.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+      if (this.isLobbyHost && this.netClient?.connected) {
+        this.netClient.send("start_match");
+      }
+    });
+    this.startMatchButton = { startBox, startText };
+    this.setStartButtonEnabled(false);
+  }
+
+  createHtmlInputs() {
+    const makeInput = (placeholder, value) => {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = value;
+      input.placeholder = placeholder;
+      input.style.position = "fixed";
+      input.style.zIndex = "20";
+      input.style.background = "#1b1713";
+      input.style.color = "#f4efe2";
+      input.style.border = "2px solid #8f7750";
+      input.style.borderRadius = "8px";
+      input.style.padding = "10px 12px";
+      input.style.font = '16px "Trebuchet MS", sans-serif';
+      input.style.outline = "none";
+      document.body.appendChild(input);
+      return input;
+    };
+
+    this.nameInput = makeInput("Commander name", this.playerName);
+    this.roomInput = makeInput("ABCDE", "");
+    this.roomInput.maxLength = 5;
+
+    const positionInputs = () => {
+      const width = this.scale.width;
+      this.nameInput.style.left = `${width - 350}px`;
+      this.nameInput.style.top = "176px";
+      this.nameInput.style.width = "236px";
+      this.roomInput.style.left = `${width - 350}px`;
+      this.roomInput.style.top = "242px";
+      this.roomInput.style.width = "236px";
+      this.roomInput.value = this.roomInput.value.toUpperCase();
+    };
+
+    positionInputs();
+    this.scale.on("resize", positionInputs);
+    this.htmlInputsPositioner = positionInputs;
+  }
+
+  destroyHtmlInputs() {
+    this.nameInput?.remove();
+    this.roomInput?.remove();
+    if (this.htmlInputsPositioner) {
+      this.scale.off("resize", this.htmlInputsPositioner);
+    }
+  }
+
   createProfileControls() {
     const box = this.add.rectangle(430, 132, 190, 38, 0x231c17, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
     const text = this.add.text(525, 151, "Rename Profile", { fontSize: "17px", color: "#f4efe2" }).setOrigin(0.5);
@@ -135,7 +216,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   async renameProfile() {
-    const nextName = window.prompt("New commander name?", this.playerName)?.trim();
+    const nextName = this.nameInput?.value.trim();
     if (!nextName) {
       return;
     }
@@ -146,6 +227,7 @@ export class MenuScene extends Phaser.Scene {
 
     if (!this.playFabIdentity?.enabled) {
       this.playerName = nextName;
+      this.nameInput.value = this.playerName;
       this.profileText.setText(`Profile: ${this.playerName}  |  local guest`);
       this.statusText.setText("Local profile renamed.");
       return;
@@ -156,6 +238,7 @@ export class MenuScene extends Phaser.Scene {
       const result = await updateUserTitleDisplayName(this.playFabIdentity.sessionTicket, nextName);
       this.playerName = result.DisplayName || nextName;
       this.playFabIdentity.displayName = this.playerName;
+      this.nameInput.value = this.playerName;
       this.profileText.setText(`Profile: ${this.playerName}  |  PlayFab ${this.playFabIdentity.playFabId}`);
       this.statusText.setText("PlayFab profile updated.");
     } catch (error) {
@@ -173,7 +256,54 @@ export class MenuScene extends Phaser.Scene {
     const message = await client.connect();
     this.netClient = client;
     this.connectedPlayerId = message.playerId;
+    this.registerLobbyHandlers(client);
     return client;
+  }
+
+  registerLobbyHandlers(client) {
+    if (this.lobbyHandlersRegistered) {
+      return;
+    }
+    this.lobbyHandlersRegistered = true;
+    client.on("room_created", (message) => {
+      this.isLobbyHost = true;
+      this.roomInput.value = message.roomCode;
+      this.lobbyRoomText.setText(`Room: ${message.roomCode}`);
+      this.statusText.setText(`Room ${message.roomCode} created. Waiting for players.`);
+      this.setStartButtonEnabled(false);
+    });
+    client.on("room_joined", (message) => {
+      this.isLobbyHost = false;
+      this.roomInput.value = message.roomCode;
+      this.lobbyRoomText.setText(`Room: ${message.roomCode}`);
+      this.statusText.setText(`Joined room ${message.roomCode}. Waiting for host.`);
+      this.setStartButtonEnabled(false);
+    });
+    client.on("lobby_update", (message) => {
+      this.lobbyState = message;
+      this.lobbyRoomText.setText(`Room: ${message.roomCode}`);
+      this.lobbyPlayersText.setText(
+        `Players:\n${message.players
+          .map((player) => `${player.isHost ? "[Host]" : "[Guest]"} ${player.name} - ${FACTION_DEFS[player.faction].name}`)
+          .join("\n")}`
+      );
+      const canStart = this.isLobbyHost && message.players.length >= 2;
+      this.setStartButtonEnabled(canStart);
+      this.statusText.setText(
+        canStart ? `Room ${message.roomCode} ready. Start when you want.` : `Room ${message.roomCode} | Players ${message.players.length}/4`
+      );
+    });
+    client.on("match_started", (message) => {
+      this.launchMultiplayerGame(client, message);
+    });
+    client.on("error_message", (message) => {
+      this.statusText.setText(message.message);
+    });
+  }
+
+  setStartButtonEnabled(enabled) {
+    this.startMatchButton.startBox.setFillStyle(enabled ? 0x3a2d1f : 0x221c16, 0.96);
+    this.startMatchButton.startText.setColor(enabled ? "#fff1d1" : "#968976");
   }
 
   startSingleplayer() {
@@ -193,43 +323,23 @@ export class MenuScene extends Phaser.Scene {
   async hostMultiplayer() {
     try {
       const client = await this.prepareNetwork();
-      client.on("room_created", (message) => {
-        this.statusText.setText(`Room ${message.roomCode} created. Share it, then press ENTER to start.`);
-      });
-      client.on("lobby_update", (message) => {
-        this.pendingLobby = message;
-        this.statusText.setText(`Room ${message.roomCode} | Players ${message.players.length}/4 | ENTER to start`);
-      });
-      client.on("match_started", (message) => {
-        this.launchMultiplayerGame(client, message);
-      });
+      this.playerName = this.nameInput?.value.trim() || this.playerName;
       client.send("create_room", { name: this.playerName, faction: this.selectedFaction });
-      this.input.keyboard.once("keydown-ENTER", () => client.send("start_match"));
     } catch {
       this.statusText.setText("Could not connect to multiplayer server.");
     }
   }
 
   async joinMultiplayer() {
-    const roomCode = window.prompt("Room code?")?.trim().toUpperCase();
+    const roomCode = this.roomInput?.value.trim().toUpperCase();
     if (!roomCode) {
+      this.statusText.setText("Enter a room code first.");
       return;
     }
 
     try {
       const client = await this.prepareNetwork();
-      client.on("room_joined", (message) => {
-        this.statusText.setText(`Joined room ${message.roomCode}. Waiting for host...`);
-      });
-      client.on("lobby_update", (message) => {
-        this.statusText.setText(`Room ${message.roomCode} | Players ${message.players.length}/4 | waiting for host`);
-      });
-      client.on("match_started", (message) => {
-        this.launchMultiplayerGame(client, message);
-      });
-      client.on("error_message", (message) => {
-        this.statusText.setText(message.message);
-      });
+      this.playerName = this.nameInput?.value.trim() || this.playerName;
       client.send("join_room", { roomCode, name: this.playerName, faction: this.selectedFaction });
     } catch {
       this.statusText.setText("Could not connect to multiplayer server.");
