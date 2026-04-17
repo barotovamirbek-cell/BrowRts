@@ -19,6 +19,7 @@ export class MenuScene extends Phaser.Scene {
     this.playFabIdentity = null;
     this.lobbyState = null;
     this.isLobbyHost = false;
+    this.isPublicSite = window.location.hostname.includes("github.io");
 
     const { width, height } = this.scale;
     const bg = this.add.graphics();
@@ -38,6 +39,14 @@ export class MenuScene extends Phaser.Scene {
       fontSize: "18px",
       color: "#b9b1a4"
     });
+    this.add.text(
+      56,
+      736,
+      this.isPublicSite
+        ? "Public site: solo works here. Multiplayer needs a separate running WebSocket backend."
+        : "Local build: start the Node websocket server before using multiplayer.",
+      { fontSize: "15px", color: "#aa9f8f", wordWrap: { width: 780 } }
+    );
 
     this.profileText = this.add.text(56, 138, "Profile: local guest", {
       fontSize: "17px",
@@ -251,6 +260,9 @@ export class MenuScene extends Phaser.Scene {
     if (this.netClient?.connected) {
       return this.netClient;
     }
+    if (this.isPublicSite && !import.meta.env.VITE_MULTIPLAYER_WS_URL) {
+      throw new Error("Multiplayer is not available on the static site without a deployed websocket server.");
+    }
     this.statusText.setText("Connecting to multiplayer server...");
     const client = new NetClient(this.serverUrl);
     const message = await client.connect();
@@ -325,8 +337,13 @@ export class MenuScene extends Phaser.Scene {
       const client = await this.prepareNetwork();
       this.playerName = this.nameInput?.value.trim() || this.playerName;
       client.send("create_room", { name: this.playerName, faction: this.selectedFaction });
-    } catch {
-      this.statusText.setText("Could not connect to multiplayer server.");
+    } catch (error) {
+      this.statusText.setText(
+        this.isPublicSite
+          ? "No multiplayer backend configured for the public site."
+          : "Could not connect. Start `npm run dev:server` first."
+      );
+      console.error(error);
     }
   }
 
@@ -341,8 +358,13 @@ export class MenuScene extends Phaser.Scene {
       const client = await this.prepareNetwork();
       this.playerName = this.nameInput?.value.trim() || this.playerName;
       client.send("join_room", { roomCode, name: this.playerName, faction: this.selectedFaction });
-    } catch {
-      this.statusText.setText("Could not connect to multiplayer server.");
+    } catch (error) {
+      this.statusText.setText(
+        this.isPublicSite
+          ? "No multiplayer backend configured for the public site."
+          : "Could not connect. Start `npm run dev:server` first."
+      );
+      console.error(error);
     }
   }
 
