@@ -355,7 +355,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   buildCommandButtons() {
-    this.ui.buttons.forEach((button) => button.container.destroy());
+    this.ui.buttons.forEach((button) => {
+      button.container.destroy();
+      button.hit.destroy();
+    });
     this.ui.buttons = [];
     for (let index = 0; index < 9; index += 1) {
       const keybind = COMMAND_GRID_KEYS[index];
@@ -363,8 +366,10 @@ export class GameScene extends Phaser.Scene {
       const keycap = this.add.text(-57, -18, keybind.label, { fontSize: "11px", color: "#8f887b" }).setOrigin(0, 0);
       const title = this.add.text(0, -7, "", { fontSize: "15px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
       const sub = this.add.text(0, 11, "", { fontSize: "11px", color: "#bdb5a4", align: "center" }).setOrigin(0.5);
-      const hit = this.add.rectangle(0, 0, 132, 46, 0x000000, 0.001).setInteractive({ useHandCursor: true });
-      const container = this.add.container(0, 0, [bg, keycap, title, sub, hit]).setScrollFactor(0).setDepth(2000);
+      const hit = this.add.zone(0, 0, 132, 46).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+      hit.setRectangleDropZone(132, 46);
+      hit.setInteractive({ useHandCursor: true });
+      const container = this.add.container(0, 0, [bg, keycap, title, sub]).setScrollFactor(0).setDepth(2000);
       container.setSize(132, 46);
       const button = { container, bg, keycap, title, sub, hit, action: null };
       hit
@@ -404,6 +409,10 @@ export class GameScene extends Phaser.Scene {
       const col = index % cols;
       const row = Math.floor(index / cols);
       button.container.setPosition(
+        left + col * (cellW + gapX) + cellW / 2,
+        top + row * (cellH + gapY) + cellH / 2
+      );
+      button.hit.setPosition(
         left + col * (cellW + gapX) + cellW / 2,
         top + row * (cellH + gapY) + cellH / 2
       );
@@ -513,7 +522,25 @@ export class GameScene extends Phaser.Scene {
       build: Phaser.Input.Keyboard.KeyCodes.B,
       home: Phaser.Input.Keyboard.KeyCodes.H
     });
-    this.keys.commandSlots = COMMAND_GRID_KEYS.map((entry) => this.input.keyboard.addKey(entry.code));
+    this.commandKeyCodeToSlot = {
+      KeyQ: 0,
+      KeyW: 1,
+      KeyE: 2,
+      KeyA: 3,
+      KeyS: 4,
+      KeyD: 5,
+      KeyZ: 6,
+      KeyX: 7,
+      KeyC: 8
+    };
+    this.input.keyboard.on("keydown", (event) => {
+      const slot = this.commandKeyCodeToSlot[event.code];
+      if (slot === undefined) {
+        return;
+      }
+      this.triggerCommandSlot(slot);
+      event.preventDefault();
+    });
 
     this.dragSelect = { active: false, button: null, pointerId: null, start: new Phaser.Math.Vector2(), end: new Phaser.Math.Vector2() };
 
@@ -748,11 +775,6 @@ export class GameScene extends Phaser.Scene {
         this.enterBuildMode("farm");
       }
     }
-    this.keys.commandSlots.forEach((key, index) => {
-      if (Phaser.Input.Keyboard.JustDown(key)) {
-        this.triggerCommandSlot(index);
-      }
-    });
     if (Phaser.Input.Keyboard.JustDown(this.keys.home)) {
       const townhall = this.state.buildings.find((entry) => entry.ownerId === this.localPlayerId && entry.type === "townhall");
       if (townhall) {
