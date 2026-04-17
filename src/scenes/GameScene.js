@@ -24,13 +24,11 @@ const FACTION_BUILDING_BASE = {
 };
 
 const BUILDING_FRAME_OFFSETS = {
-  townhall: 2,
-  farm: 7,
-  barracks: 3,
+  townhall: 1,
+  farm: 6,
+  barracks: 4,
   tower: 5
 };
-
-const TERRAIN_DECOR_FRAMES = [1, 2, 94, 95, 112];
 
 const RESOURCE_VISUALS = {
   wood: { frame: 112, scale: 2.3, shadowScale: [1.05, 0.82] },
@@ -118,7 +116,8 @@ export class GameScene extends Phaser.Scene {
       message: "",
       messageUntil: 0,
       ai: {},
-      snapshotSeen: false
+      snapshotSeen: false,
+      matchStartedAt: this.time.now
     };
 
     this.roster.forEach((entry) => {
@@ -127,7 +126,11 @@ export class GameScene extends Phaser.Scene {
         factionDef: FACTION_DEFS[entry.faction],
         resources: { gold: 320, wood: 260, supplyUsed: 0, supplyCap: 0 }
       };
-      this.state.ai[entry.playerId] = { nextDecisionAt: 0, nextAttackAt: 0 };
+      this.state.ai[entry.playerId] = {
+        nextDecisionAt: Phaser.Math.Between(900, 2200),
+        nextAttackAt: this.time.now + Phaser.Math.Between(90000, 125000),
+        attackWave: 0
+      };
     });
 
     this.input.mouse.disableContextMenu();
@@ -169,22 +172,26 @@ export class GameScene extends Phaser.Scene {
   createMap() {
     this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
 
-    const grassBase = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 0).setOrigin(0);
+    const baseTint = this.add.graphics();
+    baseTint.fillGradientStyle(0x689d63, 0x75ab6b, 0x4e7e52, 0x5b8b57, 1);
+    baseTint.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+
+    const grassBase = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 0).setOrigin(0).setAlpha(0.55);
     grassBase.tileScaleX = 2;
     grassBase.tileScaleY = 2;
 
-    const grassNoise = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 1).setOrigin(0).setAlpha(0.32);
+    const grassNoise = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 1).setOrigin(0).setAlpha(0.18);
     grassNoise.tileScaleX = 2;
     grassNoise.tileScaleY = 2;
 
-    const mossBand = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 2).setOrigin(0).setAlpha(0.2);
+    const mossBand = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 2).setOrigin(0).setAlpha(0.08);
     mossBand.tileScaleX = 2;
     mossBand.tileScaleY = 2;
 
     const vignette = this.add.graphics();
-    vignette.fillStyle(0x1a140f, 0.2);
+    vignette.fillStyle(0x1a140f, 0.14);
     vignette.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
-    vignette.fillStyle(0x2d5935, 0.12);
+    vignette.fillStyle(0x2d5935, 0.1);
     for (let i = 0; i < 120; i += 1) {
       vignette.fillCircle(
         Phaser.Math.Between(0, MAP_WIDTH),
@@ -194,7 +201,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     const river = this.add.graphics();
-    river.fillStyle(0x2b5261, 0.4);
+    river.fillStyle(0x2f6f78, 0.28);
     river.fillPoints(
       [
         new Phaser.Geom.Point(460, 0),
@@ -222,19 +229,24 @@ export class GameScene extends Phaser.Scene {
     this.unitLayer = this.add.container();
     this.fxLayer = this.add.container();
 
-    for (let i = 0; i < 210; i += 1) {
-      const decor = this.add.image(
+    const flora = this.add.graphics();
+    for (let i = 0; i < 180; i += 1) {
+      flora.fillStyle(
+        Phaser.Display.Color.GetColor(
+          Phaser.Math.Between(56, 92),
+          Phaser.Math.Between(90, 138),
+          Phaser.Math.Between(48, 80)
+        ),
+        Phaser.Math.FloatBetween(0.08, 0.18)
+      );
+      flora.fillEllipse(
         Phaser.Math.Between(0, MAP_WIDTH),
         Phaser.Math.Between(0, MAP_HEIGHT),
-        "tinyBattleTiles",
-        Phaser.Utils.Array.GetRandom(TERRAIN_DECOR_FRAMES)
+        Phaser.Math.Between(14, 40),
+        Phaser.Math.Between(10, 28)
       );
-      decor
-        .setScale(Phaser.Math.FloatBetween(1.9, 2.8))
-        .setAlpha(Phaser.Math.FloatBetween(0.2, 0.4))
-        .setAngle(Phaser.Math.Between(0, 360));
-      this.overlayLayer.add(decor);
     }
+    this.overlayLayer.add(flora);
 
     this.selectionGraphics = this.add.graphics().setScrollFactor(0);
     this.commandMarker = this.add.graphics();
@@ -526,7 +538,8 @@ export class GameScene extends Phaser.Scene {
     const def = BUILDING_DEFS[type];
     const frame = this.getBuildingFrame(type, faction.key);
     const shadow = this.add.image(x, y + def.size * 0.34, "shadow-oval").setScale(def.size / 44, 1.05).setAlpha(0.22).setTint(0x000000);
-    const sprite = this.add.image(x, y, "tinyBattleTiles", frame).setDisplaySize(def.size, Math.round(def.size * 0.9));
+    const spriteScale = Math.max(3, Math.round(def.size / 16));
+    const sprite = this.add.image(x, y, "tinyBattleTiles", frame).setScale(spriteScale);
     const banner = this.add.rectangle(x, y - def.size * 0.35, Math.max(8, def.size * 0.22), Math.max(8, def.size * 0.18), faction.color, 0.95).setStrokeStyle(1, 0x18120e, 0.95);
     const hpBg = this.add.rectangle(x, y - def.size / 2 - 10, def.size, 6, 0x000000, 0.66);
     const hpFill = this.add.rectangle(x - def.size / 2, y - def.size / 2 - 10, def.size, 6, 0x6dd66d, 1).setOrigin(0, 0.5);
@@ -1010,16 +1023,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   updateAI(now) {
+    const elapsed = now - this.state.matchStartedAt;
     Object.values(this.state.players).forEach((player) => {
       if (player.isHuman) return;
       const ai = this.state.ai[player.playerId];
       if (now < ai.nextDecisionAt) return;
-      ai.nextDecisionAt = now + 2500;
+      ai.nextDecisionAt = now + Phaser.Math.Between(2200, 3200);
 
       const townhall = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "townhall" && !entry.dead);
       const barracks = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "barracks" && !entry.dead);
       const farm = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "farm" && !entry.dead);
+      if (!townhall) return;
+
       const workers = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type === "worker" && !entry.dead);
+      const combatUnits = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type !== "worker" && !entry.dead);
+
       workers.forEach((worker) => {
         if (worker.state === "idle") {
           const resource = this.findClosestResource(worker, player.resources.gold < player.resources.wood ? "gold" : "wood");
@@ -1027,29 +1045,51 @@ export class GameScene extends Phaser.Scene {
         }
       });
 
-      if (townhall?.completed && workers.length < 4) this.queueTraining(townhall, "worker");
-      if (!farm && workers[0] && this.payCost(player.playerId, BUILDING_DEFS.farm.cost)) {
+      const desiredWorkers = elapsed < 120000 ? 6 : 8;
+      if (townhall.completed && workers.length < desiredWorkers) {
+        this.queueTraining(townhall, "worker");
+      }
+
+      if (!farm && workers[0] && elapsed > 22000 && this.payCost(player.playerId, BUILDING_DEFS.farm.cost)) {
         const building = this.spawnBuilding(player.playerId, "farm", townhall.x + 120, townhall.y - 90, false);
         workers[0].buildTarget = building;
         workers[0].state = "building";
-      } else if (!barracks && workers[1] && this.payCost(player.playerId, BUILDING_DEFS.barracks.cost)) {
+      } else if (!barracks && workers[1] && elapsed > 45000 && this.payCost(player.playerId, BUILDING_DEFS.barracks.cost)) {
         const building = this.spawnBuilding(player.playerId, "barracks", townhall.x + 110, townhall.y + 110, false);
         workers[1].buildTarget = building;
         workers[1].state = "building";
       }
 
       if (barracks?.completed) {
-        const meleeCount = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type === "swordsman" && !entry.dead).length;
-        this.queueTraining(barracks, meleeCount < 3 ? "swordsman" : "archer");
+        const meleeCount = combatUnits.filter((entry) => entry.type === "swordsman").length;
+        const desiredArmy = elapsed < 150000 ? 8 : 14;
+        if (combatUnits.length < desiredArmy) {
+          this.queueTraining(barracks, meleeCount <= combatUnits.length * 0.55 ? "swordsman" : "archer");
+        }
+      }
+
+      // No early all-in rush: first coordinated attack starts after economy phase.
+      if (elapsed < 90000) {
+        return;
       }
 
       if (now >= ai.nextAttackAt) {
-        ai.nextAttackAt = now + Phaser.Math.Between(12000, 17000);
-        const attackers = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type !== "worker" && !entry.dead);
+        const attackers = combatUnits.filter((entry) => entry.type === "swordsman" || entry.type === "archer");
+        const minWaveSize = elapsed < 210000 ? 6 : 9;
+        if (attackers.length < minWaveSize) {
+          ai.nextAttackAt = now + Phaser.Math.Between(7000, 11000);
+          return;
+        }
+
+        ai.attackWave += 1;
+        ai.nextAttackAt = now + Phaser.Math.Between(22000, 32000);
         const target = [...this.state.units, ...this.state.buildings]
           .filter((entry) => entry.ownerId !== player.playerId && !entry.dead)
           .sort((a, b) => distanceSq(townhall ?? { x: 0, y: 0 }, a) - distanceSq(townhall ?? { x: 0, y: 0 }, b))[0];
-        if (target) attackers.forEach((unit) => this.commandAttack(unit, target));
+        if (target) {
+          const waveSize = Math.min(attackers.length, minWaveSize + ai.attackWave * 2);
+          attackers.slice(0, waveSize).forEach((unit) => this.commandAttack(unit, target));
+        }
       }
     });
   }
