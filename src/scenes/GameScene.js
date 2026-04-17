@@ -117,7 +117,8 @@ export class GameScene extends Phaser.Scene {
       messageUntil: 0,
       ai: {},
       snapshotSeen: false,
-      matchStartedAt: this.time.now
+      matchStartedAt: this.time.now,
+      cameraCentered: false
     };
 
     this.roster.forEach((entry) => {
@@ -143,6 +144,7 @@ export class GameScene extends Phaser.Scene {
 
     if (this.isHost) {
       this.createWorldState();
+      this.centerCameraOnLocalBase(true);
       this.showMessage("Expand, train and break the rival factions.");
     } else {
       this.showMessage("Waiting for host snapshots...");
@@ -362,7 +364,10 @@ export class GameScene extends Phaser.Scene {
       container.setSize(132, 42);
       container
         .setInteractive(new Phaser.Geom.Rectangle(-66, -21, 132, 42), Phaser.Geom.Rectangle.Contains)
-        .on("pointerdown", () => this.handleCommandButton(def));
+        .on("pointerdown", (_pointer, _x, _y, event) => {
+          event?.stopPropagation?.();
+          this.handleCommandButton(def);
+        });
       this.ui.buttons.push({ ...def, container, bg, text });
     });
   }
@@ -1424,6 +1429,24 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  centerCameraOnLocalBase(force = false) {
+    if (!force && this.state.cameraCentered) {
+      return;
+    }
+    const cam = this.cameras.main;
+    const townhall = this.state.buildings.find((entry) => entry.ownerId === this.localPlayerId && entry.type === "townhall" && !entry.dead);
+    const fallbackUnit = this.state.units.find((entry) => entry.ownerId === this.localPlayerId && !entry.dead);
+    const target = townhall ?? fallbackUnit;
+    if (!target) {
+      return;
+    }
+
+    cam.centerOn(target.x, target.y);
+    cam.scrollX = clamp(cam.scrollX, 0, MAP_WIDTH - cam.width / cam.zoom);
+    cam.scrollY = clamp(cam.scrollY, 0, MAP_HEIGHT - cam.height / cam.zoom);
+    this.state.cameraCentered = true;
+  }
+
   updateUI(now) {
     const player = this.state.players[this.localPlayerId];
     if (!player) return;
@@ -1477,6 +1500,9 @@ export class GameScene extends Phaser.Scene {
         visible = this.state.buildMode !== null;
       }
       button.container.setVisible(visible);
+      if (button.container.input) {
+        button.container.input.enabled = visible;
+      }
       button.text.setText(subtitle ? `${button.label}\n${subtitle}` : button.label);
       button.text.setFontSize(subtitle ? "13px" : "16px");
     });
@@ -1571,6 +1597,7 @@ export class GameScene extends Phaser.Scene {
     this.syncSnapshotEntities(payload.resourcesNodes, "resource");
     this.syncSnapshotEntities(payload.buildings, "building");
     this.syncSnapshotEntities(payload.units, "unit");
+    this.centerCameraOnLocalBase();
   }
 
   syncSnapshotEntities(entries, kind) {
