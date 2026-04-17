@@ -10,10 +10,31 @@ const SPAWNS = [
   { x: 2820, y: 1600 }
 ];
 
-const UNIT_VISUALS = {
-  worker: { idle: [106], move: [106, 107], attack: [107], scale: 2.2 },
-  swordsman: { idle: [107], move: [107, 106], attack: [161], scale: 2.2 },
-  archer: { idle: [178], move: [178, 179], attack: [179], scale: 2.2 }
+const FACTION_UNIT_VISUALS = {
+  kingdom: {
+    scale: 2.25,
+    worker: [113, 131],
+    swordsman: [131, 151],
+    archer: [151, 170]
+  },
+  wildkin: {
+    scale: 2.25,
+    worker: [131, 151],
+    swordsman: [170, 189],
+    archer: [151, 170]
+  },
+  dusk: {
+    scale: 2.25,
+    worker: [151, 170],
+    swordsman: [170, 189],
+    archer: [189, 151]
+  },
+  ember: {
+    scale: 2.25,
+    worker: [170, 189],
+    swordsman: [189, 131],
+    archer: [170, 113]
+  }
 };
 
 const FACTION_BUILDING_BASE = {
@@ -31,9 +52,12 @@ const BUILDING_FRAME_OFFSETS = {
 };
 
 const RESOURCE_VISUALS = {
-  wood: { frame: 112, scale: 2.3, shadowScale: [1.05, 0.82] },
-  gold: { frame: 5, scale: 2.3, shadowScale: [1.25, 0.85] }
+  wood: { frame: 112, scale: 2.4, shadowScale: [1.15, 0.9] },
+  gold: { frame: 4, scale: 2.9, shadowScale: [1.45, 1.05] }
 };
+
+const WOOD_CLUSTER_FRAMES = [112, 118, 119, 130, 149, 168, 187];
+const FOG_CELL_SIZE = 56;
 
 const COMMAND_GRID_KEYS = [
   { code: Phaser.Input.Keyboard.KeyCodes.Q, label: "Q" },
@@ -100,12 +124,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   getUnitFrames(unitType, factionKey) {
-    const unitVisual = UNIT_VISUALS[unitType] ?? UNIT_VISUALS.worker;
+    const factionVisuals = FACTION_UNIT_VISUALS[factionKey] ?? FACTION_UNIT_VISUALS.kingdom;
+    const framePair = factionVisuals[unitType] ?? factionVisuals.worker;
     return {
-      idle: [...unitVisual.idle],
-      move: [...unitVisual.move],
-      attack: [...unitVisual.attack],
-      scale: unitVisual.scale
+      idle: [framePair[0]],
+      move: [framePair[0], framePair[1]],
+      attack: [framePair[1]],
+      scale: factionVisuals.scale
     };
   }
 
@@ -121,6 +146,7 @@ export class GameScene extends Phaser.Scene {
       buildings: [],
       resourcesNodes: [],
       selected: [],
+      inspectedResource: null,
       nextId: 1,
       buildMode: null,
       placingGhost: null,
@@ -130,7 +156,9 @@ export class GameScene extends Phaser.Scene {
       ai: {},
       snapshotSeen: false,
       matchStartedAt: this.time.now,
-      cameraCentered: false
+      cameraCentered: false,
+      fog: null,
+      lastFogDrawAt: 0
     };
 
     this.roster.forEach((entry) => {
@@ -187,7 +215,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
 
     const baseTint = this.add.graphics();
-    baseTint.fillGradientStyle(0x689d63, 0x75ab6b, 0x4e7e52, 0x5b8b57, 1);
+    baseTint.fillGradientStyle(0x638f5a, 0x81b16f, 0x446f49, 0x507f4f, 1);
     baseTint.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
 
     const grassBase = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 0).setOrigin(0).setAlpha(0.55);
@@ -198,9 +226,13 @@ export class GameScene extends Phaser.Scene {
     grassNoise.tileScaleX = 2;
     grassNoise.tileScaleY = 2;
 
-    const mossBand = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 2).setOrigin(0).setAlpha(0.08);
+    const mossBand = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 2).setOrigin(0).setAlpha(0.12);
     mossBand.tileScaleX = 2;
     mossBand.tileScaleY = 2;
+
+    const stoneNoise = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyDungeonTiles", 175).setOrigin(0).setAlpha(0.06);
+    stoneNoise.tileScaleX = 2;
+    stoneNoise.tileScaleY = 2;
 
     const vignette = this.add.graphics();
     vignette.fillStyle(0x1a140f, 0.14);
@@ -262,8 +294,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.overlayLayer.add(flora);
 
-    this.selectionGraphics = this.add.graphics().setScrollFactor(0);
-    this.commandMarker = this.add.graphics();
+    this.selectionGraphics = this.add.graphics().setScrollFactor(0).setDepth(6400);
+    this.commandMarker = this.add.graphics().setDepth(3500);
+    this.setupFogOfWar();
   }
 
   createScreenPulse() {
@@ -273,40 +306,196 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  setupFogOfWar() {
+    const cols = Math.ceil(MAP_WIDTH / FOG_CELL_SIZE);
+    const rows = Math.ceil(MAP_HEIGHT / FOG_CELL_SIZE);
+    this.state.fog = {
+      cols,
+      rows,
+      cellSize: FOG_CELL_SIZE,
+      explored: new Uint8Array(cols * rows),
+      visible: new Uint8Array(cols * rows),
+      graphics: this.add.graphics().setDepth(3000)
+    };
+  }
+
+  getFogIndex(col, row) {
+    const fog = this.state.fog;
+    if (!fog) return -1;
+    if (col < 0 || row < 0 || col >= fog.cols || row >= fog.rows) return -1;
+    return row * fog.cols + col;
+  }
+
+  markFogCircle(worldX, worldY, radius) {
+    const fog = this.state.fog;
+    if (!fog) return;
+    const minCol = Math.floor((worldX - radius) / fog.cellSize);
+    const maxCol = Math.floor((worldX + radius) / fog.cellSize);
+    const minRow = Math.floor((worldY - radius) / fog.cellSize);
+    const maxRow = Math.floor((worldY + radius) / fog.cellSize);
+    const radiusSq = radius * radius;
+
+    for (let row = minRow; row <= maxRow; row += 1) {
+      for (let col = minCol; col <= maxCol; col += 1) {
+        const index = this.getFogIndex(col, row);
+        if (index < 0) continue;
+        const centerX = col * fog.cellSize + fog.cellSize * 0.5;
+        const centerY = row * fog.cellSize + fog.cellSize * 0.5;
+        const dx = centerX - worldX;
+        const dy = centerY - worldY;
+        if (dx * dx + dy * dy > radiusSq) continue;
+        fog.visible[index] = 1;
+        fog.explored[index] = 1;
+      }
+    }
+  }
+
+  isPointVisible(worldX, worldY) {
+    const fog = this.state.fog;
+    if (!fog) return true;
+    const col = Math.floor(worldX / fog.cellSize);
+    const row = Math.floor(worldY / fog.cellSize);
+    const index = this.getFogIndex(col, row);
+    return index >= 0 ? fog.visible[index] === 1 : false;
+  }
+
+  isPointExplored(worldX, worldY) {
+    const fog = this.state.fog;
+    if (!fog) return true;
+    const col = Math.floor(worldX / fog.cellSize);
+    const row = Math.floor(worldY / fog.cellSize);
+    const index = this.getFogIndex(col, row);
+    return index >= 0 ? fog.explored[index] === 1 : false;
+  }
+
+  updateFogOfWar(now) {
+    const fog = this.state.fog;
+    if (!fog) return;
+
+    fog.visible.fill(0);
+    this.state.units.filter((entry) => entry.ownerId === this.localPlayerId && !entry.dead).forEach((unit) => {
+      const radius = unit.type === "worker" ? 220 : 245;
+      this.markFogCircle(unit.x, unit.y, radius);
+    });
+    this.state.buildings.filter((entry) => entry.ownerId === this.localPlayerId && !entry.dead).forEach((building) => {
+      const radius = building.type === "townhall" ? 300 : 240;
+      this.markFogCircle(building.x, building.y, radius);
+    });
+
+    this.applyFogVisibilityToEntities();
+
+    if (now - this.state.lastFogDrawAt > 120) {
+      this.state.lastFogDrawAt = now;
+      this.drawFogOverlay();
+    }
+  }
+
+  drawFogOverlay() {
+    const fog = this.state.fog;
+    if (!fog) return;
+    const g = fog.graphics;
+    g.clear();
+    for (let row = 0; row < fog.rows; row += 1) {
+      for (let col = 0; col < fog.cols; col += 1) {
+        const index = row * fog.cols + col;
+        if (fog.visible[index]) continue;
+        const alpha = fog.explored[index] ? 0.5 : 0.93;
+        g.fillStyle(0x060608, alpha);
+        g.fillRect(col * fog.cellSize, row * fog.cellSize, fog.cellSize, fog.cellSize);
+      }
+    }
+  }
+
+  applyFogVisibilityToEntities() {
+    this.state.units.forEach((unit) => {
+      const visible = unit.ownerId === this.localPlayerId || this.isPointVisible(unit.x, unit.y);
+      [unit.shadow, unit.sprite, unit.marker, unit.hpBg, unit.hpFill].forEach((part) => part.setVisible(visible));
+      unit.selection.setVisible(visible && this.state.selected.includes(unit));
+    });
+
+    this.state.buildings.forEach((building) => {
+      const visible = building.ownerId === this.localPlayerId || this.isPointVisible(building.x, building.y);
+      [building.shadow, building.sprite, building.banner, building.hpBg, building.hpFill].forEach((part) => part.setVisible(visible));
+      const showLabel = visible && !building.completed;
+      building.label.setVisible(showLabel);
+      building.selection.setVisible(visible && this.state.selected.includes(building));
+    });
+
+    this.state.resourcesNodes.forEach((node) => {
+      const explored = this.isPointExplored(node.x, node.y);
+      const visible = this.isPointVisible(node.x, node.y);
+      node.shadow.setVisible(explored).setAlpha(visible ? 0.22 : 0.12);
+      node.sprite.setVisible(explored && node.type === "gold").setAlpha(visible ? 1 : 0.6);
+      if (node.amountPlate) node.amountPlate.setVisible(explored).setAlpha(visible ? 0.76 : 0.5);
+      if (node.amountText) {
+        node.amountText
+          .setVisible(explored)
+          .setAlpha(visible ? 1 : 0.7)
+          .setText(`${Math.max(0, Math.floor(node.amount))}/${Math.floor(node.maxAmount ?? node.amount)}`);
+      }
+      node.decorations?.forEach((part) => part.setVisible(explored).setAlpha(visible ? 1 : 0.62));
+    });
+  }
+
   createWorldState() {
     this.roster.forEach((entry, index) => {
       const spawn = SPAWNS[index];
       this.spawnStartingBase(entry.playerId, spawn.x, spawn.y, index);
+      this.spawnStartingResources(spawn.x, spawn.y, index);
     });
 
     [
-      ["gold", 750, 1260, 1800],
-      ["gold", 1120, 1480, 1800],
-      ["gold", 2440, 860, 1800],
-      ["gold", 2740, 620, 1800],
-      ["gold", 680, 560, 1800],
-      ["gold", 1490, 1080, 2200],
-      ["gold", 2430, 1530, 1800],
-      ["wood", 490, 1220, 2600],
-      ["wood", 1010, 1710, 2600],
-      ["wood", 2450, 1010, 2600],
-      ["wood", 2960, 840, 2600],
-      ["wood", 330, 310, 2600],
-      ["wood", 1660, 420, 2600],
-      ["wood", 1860, 1830, 2600]
-    ].forEach(([type, x, y, amount]) => this.spawnResource(type, x, y, amount));
+      [1550, 1080, 3200],
+      [930, 980, 2600],
+      [2140, 1220, 2600],
+      [1620, 540, 2400]
+    ].forEach(([x, y, amount]) => this.spawnResource("gold", x, y, amount, { maxAmount: amount }));
+
+    [
+      [640, 960],
+      [920, 1760],
+      [1720, 1680],
+      [2520, 1420],
+      [2870, 940],
+      [2010, 410],
+      [1120, 410]
+    ].forEach(([x, y]) => this.spawnWoodCluster(x, y, 3, 130, 2200));
   }
 
   spawnStartingBase(ownerId, x, y, slotIndex) {
     const sign = slotIndex % 2 === 0 ? 1 : -1;
     this.spawnBuilding(ownerId, "townhall", x, y, true);
-    this.spawnBuilding(ownerId, "farm", x + sign * 130, y - 100, true);
-    this.spawnBuilding(ownerId, "barracks", x + sign * 108, y + 108, true);
-    this.spawnUnit(ownerId, "worker", x + sign * 80, y - 42);
-    this.spawnUnit(ownerId, "worker", x + sign * 100, y + 18);
-    this.spawnUnit(ownerId, "worker", x + sign * 54, y + 74);
-    this.spawnUnit(ownerId, "swordsman", x + sign * 28, y - 110);
-    this.spawnUnit(ownerId, "archer", x - sign * 20, y - 138);
+    this.spawnUnit(ownerId, "worker", x + sign * 78, y - 46);
+    this.spawnUnit(ownerId, "worker", x + sign * 102, y + 8);
+    this.spawnUnit(ownerId, "worker", x + sign * 64, y + 64);
+    this.spawnUnit(ownerId, "worker", x + sign * 24, y + 36);
+  }
+
+  getSpawnDirection(slotIndex) {
+    return [
+      { x: 1, y: -1 },
+      { x: -1, y: 1 },
+      { x: 1, y: 1 },
+      { x: -1, y: -1 }
+    ][slotIndex % 4];
+  }
+
+  spawnStartingResources(baseX, baseY, slotIndex) {
+    const dir = this.getSpawnDirection(slotIndex);
+    const perpendicular = { x: -dir.y, y: dir.x };
+    this.spawnResource("gold", baseX + dir.x * 178, baseY + dir.y * 132, 2600, { maxAmount: 2600 });
+    this.spawnWoodCluster(baseX + dir.x * 248 + perpendicular.x * 74, baseY + dir.y * 196 + perpendicular.y * 74, 2, 86, 2300);
+    this.spawnWoodCluster(baseX + dir.x * 228 - perpendicular.x * 76, baseY + dir.y * 168 - perpendicular.y * 76, 2, 76, 2200);
+  }
+
+  spawnWoodCluster(centerX, centerY, nodes = 3, spread = 120, amount = 2200) {
+    for (let i = 0; i < nodes; i += 1) {
+      const angle = (Math.PI * 2 * i) / nodes + Phaser.Math.FloatBetween(-0.4, 0.4);
+      const radius = Phaser.Math.Between(Math.floor(spread * 0.35), spread);
+      this.spawnResource("wood", centerX + Math.cos(angle) * radius, centerY + Math.sin(angle) * radius, amount, {
+        maxAmount: amount
+      });
+    }
   }
 
   createUI() {
@@ -315,8 +504,16 @@ export class GameScene extends Phaser.Scene {
     const faction = this.state.players[this.localPlayerId]?.factionDef ?? FACTION_DEFS.kingdom;
 
     this.ui = {
-      topBar: this.add.rectangle(0, 0, width, 54, 0x120f0d, 0.94).setOrigin(0).setScrollFactor(0),
-      bottomBar: this.add.rectangle(0, height - 160, width, 160, 0x120f0d, 0.96).setOrigin(0).setScrollFactor(0),
+      topBar: this.add.rectangle(0, 0, width, 54, 0x0e0c0b, 0.95).setOrigin(0).setScrollFactor(0),
+      topInner: this.add.rectangle(6, 6, width - 12, 42, 0x17120f, 0.82).setOrigin(0).setScrollFactor(0).setStrokeStyle(1, 0x4a3f31, 0.8),
+      bottomBar: this.add.rectangle(0, height - 160, width, 160, 0x100d0c, 0.97).setOrigin(0).setScrollFactor(0),
+      infoPanel: this.add.rectangle(12, height - 152, 364, 142, 0x17120f, 0.8).setOrigin(0).setScrollFactor(0).setStrokeStyle(2, 0x554935, 0.88),
+      commandPanel: this.add
+        .rectangle(384, height - 156, Math.max(420, width - 620), 150, 0x17120f, 0.8)
+        .setOrigin(0)
+        .setScrollFactor(0)
+        .setStrokeStyle(2, 0x4c4333, 0.88),
+      minimapPanel: this.add.rectangle(width - 220, height - 156, 208, 152, 0x17120f, 0.84).setOrigin(0).setScrollFactor(0).setStrokeStyle(2, 0x5d513b, 0.9),
       topAccent: this.add.rectangle(0, 54, width, 2, faction.color, 0.85).setOrigin(0).setScrollFactor(0),
       bottomAccent: this.add.rectangle(0, height - 160, width, 2, faction.color, 0.85).setOrigin(0).setScrollFactor(0),
       title: this.add.text(16, 12, "Ironfront", { fontFamily: "Georgia", fontSize: "26px", color: faction.ui }).setScrollFactor(0),
@@ -342,7 +539,13 @@ export class GameScene extends Phaser.Scene {
       buttons: []
     };
 
-    this.minimap = this.add.graphics().setScrollFactor(0);
+    this.minimap = this.add.graphics().setScrollFactor(0).setDepth(6100);
+    Object.values(this.ui).forEach((entry) => {
+      if (entry && typeof entry.setDepth === "function" && entry !== this.ui.buttons) {
+        entry.setDepth(6000);
+      }
+    });
+
     this.ui.minimapHitbox
       .setInteractive({ useHandCursor: true })
       .on("pointerdown", (pointer) => this.handleMinimapNavigation(pointer))
@@ -366,9 +569,9 @@ export class GameScene extends Phaser.Scene {
       const keycap = this.add.text(-57, -18, keybind.label, { fontSize: "11px", color: "#8f887b" }).setOrigin(0, 0);
       const title = this.add.text(0, -7, "", { fontSize: "15px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
       const sub = this.add.text(0, 11, "", { fontSize: "11px", color: "#bdb5a4", align: "center" }).setOrigin(0.5);
-      const hit = this.add.rectangle(0, 0, 136, 50, 0x000000, 0.001).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+      const hit = this.add.rectangle(0, 0, 136, 50, 0x000000, 0.001).setOrigin(0.5).setScrollFactor(0).setDepth(6201);
       hit.setInteractive({ useHandCursor: true });
-      const container = this.add.container(0, 0, [bg, keycap, title, sub]).setScrollFactor(0).setDepth(2000);
+      const container = this.add.container(0, 0, [bg, keycap, title, sub]).setScrollFactor(0).setDepth(6200);
       container.setSize(132, 46);
       const button = { container, bg, keycap, title, sub, hit, action: null };
       hit
@@ -470,7 +673,11 @@ export class GameScene extends Phaser.Scene {
       const width = gameSize.width;
       const height = gameSize.height;
       this.ui.topBar.setSize(width, 54);
+      this.ui.topInner.setSize(width - 12, 42);
       this.ui.bottomBar.setPosition(0, height - 160).setSize(width, 160);
+      this.ui.infoPanel.setPosition(12, height - 152);
+      this.ui.commandPanel.setPosition(384, height - 156).setSize(Math.max(420, width - 620), 150);
+      this.ui.minimapPanel.setPosition(width - 220, height - 156);
       this.ui.topAccent.setSize(width, 2);
       this.ui.bottomAccent.setPosition(0, height - 160).setSize(width, 2);
       this.ui.status.setPosition(width - 18, 15);
@@ -633,7 +840,8 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  spawnResource(type, x, y, amount) {
+  spawnResource(type, x, y, amount, options = {}) {
+    const { fixedId = null, maxAmount = amount } = options;
     const visual = RESOURCE_VISUALS[type] ?? RESOURCE_VISUALS.wood;
     const shadow = this.add
       .image(x, y + 20, "shadow-oval")
@@ -641,8 +849,54 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(0.22)
       .setTint(0x000000);
     const sprite = this.add.image(x, y, "tinyBattleTiles", visual.frame).setScale(visual.scale);
-    this.resourceLayer.add([shadow, sprite]);
-    const node = { id: this.state.nextId++, kind: "resource", type, x, y, amount, sprite, shadow, radius: type === "gold" ? 30 : 26 };
+    const decorations = [];
+    let amountPlate = null;
+    let amountText = null;
+
+    if (type === "wood") {
+      sprite.setAlpha(0.001);
+      for (let i = 0; i < 14; i += 1) {
+        const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+        const radius = Phaser.Math.Between(10, 52);
+        const offsetX = Math.cos(angle) * radius;
+        const offsetY = Math.sin(angle) * radius * 0.65;
+        const tree = this.add
+          .image(x + offsetX, y + offsetY, "tinyBattleTiles", Phaser.Utils.Array.GetRandom(WOOD_CLUSTER_FRAMES))
+          .setScale(Phaser.Math.FloatBetween(2.15, 2.7))
+          .setTint(
+            Phaser.Display.Color.GetColor(
+              Phaser.Math.Between(138, 188),
+              Phaser.Math.Between(176, 230),
+              Phaser.Math.Between(118, 164)
+            )
+          )
+          .setDepth(y + offsetY + 8);
+        decorations.push(tree);
+      }
+    } else {
+      amountPlate = this.add.rectangle(x, y + 34, 74, 16, 0x130f0c, 0.76).setStrokeStyle(1, 0x5a4a30, 0.95).setDepth(y + 36);
+      amountText = this.add.text(x, y + 34, `${Math.floor(amount)}`, { fontSize: "11px", color: "#f4d986" }).setOrigin(0.5).setDepth(y + 37);
+      const rim = this.add.circle(x, y + 2, 40, 0x2b2115, 0.22).setStrokeStyle(1, 0x78603c, 0.5).setDepth(y - 12);
+      decorations.push(rim);
+      sprite.setTint(0xf3d58b);
+    }
+
+    this.resourceLayer.add([shadow, ...decorations, sprite, amountPlate, amountText].filter(Boolean));
+    const node = {
+      id: fixedId ?? this.state.nextId++,
+      kind: "resource",
+      type,
+      x,
+      y,
+      amount,
+      maxAmount,
+      sprite,
+      shadow,
+      decorations,
+      amountPlate,
+      amountText,
+      radius: type === "gold" ? 38 : 58
+    };
     sprite.setData("entity", node);
     this.state.resourcesNodes.push(node);
     return node;
@@ -655,6 +909,7 @@ export class GameScene extends Phaser.Scene {
     const frames = this.getUnitFrames(type, faction.key);
     const shadow = this.add.image(x, y + 14, "shadow-oval").setScale(0.62).setAlpha(0.26).setTint(0x000000);
     const sprite = this.add.image(x, y, "tinyBattleTiles", frames.idle[0]).setScale(frames.scale);
+    sprite.setTint(faction.unitTints?.[type] ?? faction.color ?? 0xffffff);
     const marker = this.add.circle(x, y - 16, 3, faction.color, 0.95).setStrokeStyle(1, 0x1a140f, 0.95);
     const hpBg = this.add.rectangle(x, y - 18, 30, 4, 0x000000, 0.6);
     const hpFill = this.add.rectangle(x - 15, y - 18, 30, 4, 0x6dd66d, 1).setOrigin(0, 0.5);
@@ -706,6 +961,7 @@ export class GameScene extends Phaser.Scene {
     const shadow = this.add.image(x, y + def.size * 0.34, "shadow-oval").setScale(def.size / 44, 1.05).setAlpha(0.22).setTint(0x000000);
     const spriteScale = Math.max(3, Math.round(def.size / 16));
     const sprite = this.add.image(x, y, "tinyBattleTiles", frame).setScale(spriteScale);
+    sprite.setTint(faction.color);
     const banner = this.add.rectangle(x, y - def.size * 0.35, Math.max(8, def.size * 0.22), Math.max(8, def.size * 0.18), faction.color, 0.95).setStrokeStyle(1, 0x18120e, 0.95);
     const hpBg = this.add.rectangle(x, y - def.size / 2 - 10, def.size, 6, 0x000000, 0.66);
     const hpFill = this.add.rectangle(x - def.size / 2, y - def.size / 2 - 10, def.size, 6, 0x6dd66d, 1).setOrigin(0, 0.5);
@@ -771,6 +1027,7 @@ export class GameScene extends Phaser.Scene {
       this.checkEndConditions();
     }
 
+    this.updateFogOfWar(now);
     this.updateUI(now);
     this.drawMinimap();
   }
@@ -803,11 +1060,21 @@ export class GameScene extends Phaser.Scene {
   handleSingleSelection(worldPoint, additive) {
     const entity = this.getEntityAt(worldPoint);
     if (!additive) this.clearSelection();
-    if (entity && entity.ownerId === this.localPlayerId) this.addToSelection(entity);
+    if (!entity) {
+      this.state.inspectedResource = null;
+      return;
+    }
+    if (entity.kind === "resource") {
+      this.state.inspectedResource = entity;
+      return;
+    }
+    this.state.inspectedResource = null;
+    if (entity.ownerId === this.localPlayerId) this.addToSelection(entity);
   }
 
   selectInRect(rect, additive) {
     if (!additive) this.clearSelection();
+    this.state.inspectedResource = null;
     this.state.units.filter((entry) => entry.ownerId === this.localPlayerId && pointInRect(entry, rect)).forEach((entry) => this.addToSelection(entry));
     if (this.state.selected.length === 0) {
       this.state.buildings.filter((entry) => entry.ownerId === this.localPlayerId && pointInRect(entry, rect)).forEach((entry) => this.addToSelection(entry));
@@ -827,17 +1094,23 @@ export class GameScene extends Phaser.Scene {
 
   getEntityAt(worldPoint) {
     const hits = [
-      ...this.state.units.filter((entry) => distanceSq(entry, worldPoint) <= (entry.def.radius + 4) ** 2),
+      ...this.state.units.filter(
+        (entry) =>
+          (entry.ownerId === this.localPlayerId || this.isPointVisible(entry.x, entry.y)) &&
+          distanceSq(entry, worldPoint) <= (entry.def.radius + 4) ** 2
+      ),
       ...this.state.buildings.filter((entry) => {
+        if (entry.ownerId !== this.localPlayerId && !this.isPointVisible(entry.x, entry.y)) return false;
         const half = entry.def.size * 0.6;
         return worldPoint.x >= entry.x - half && worldPoint.x <= entry.x + half && worldPoint.y >= entry.y - half && worldPoint.y <= entry.y + half;
       }),
-      ...this.state.resourcesNodes.filter((entry) => distanceSq(entry, worldPoint) <= entry.radius ** 2)
+      ...this.state.resourcesNodes.filter((entry) => this.isPointExplored(entry.x, entry.y) && distanceSq(entry, worldPoint) <= entry.radius ** 2)
     ];
     return hits[0] ?? null;
   }
 
   handleRightClick(worldPoint) {
+    this.state.inspectedResource = null;
     if (this.state.selected.length === 0) return;
     if (this.state.buildMode) {
       this.cancelBuildMode();
@@ -1496,6 +1769,9 @@ export class GameScene extends Phaser.Scene {
       if (entry.amount > 0 && !entry.dead) return true;
       entry.shadow.destroy();
       entry.sprite.destroy();
+      entry.amountPlate?.destroy();
+      entry.amountText?.destroy();
+      entry.decorations?.forEach((part) => part.destroy());
       return false;
     });
     this.state.units = this.state.units.filter((entry) => {
@@ -1601,7 +1877,18 @@ export class GameScene extends Phaser.Scene {
       this.roster.map((entry) => `${entry.playerId === this.localPlayerId ? ">" : " "} ${FACTION_DEFS[entry.faction].name}${entry.isHuman ? "" : " AI"}`).join("\n")
     );
 
-    if (this.state.selected.length === 0) {
+    if (this.state.inspectedResource?.dead || this.state.inspectedResource?.amount <= 0) {
+      this.state.inspectedResource = null;
+    }
+
+    if (this.state.selected.length === 0 && this.state.inspectedResource) {
+      const node = this.state.inspectedResource;
+      const kindLabel = node.type === "gold" ? "Gold Mine" : "Forest";
+      this.ui.selection.setText(`${kindLabel}  ${Math.max(0, Math.floor(node.amount))}/${Math.floor(node.maxAmount ?? node.amount)}`);
+      this.ui.details.setText(
+        node.type === "gold" ? "Workers mine gold here and return it to Town Hall." : "Workers chop wood from this forest patch."
+      );
+    } else if (this.state.selected.length === 0) {
       this.ui.selection.setText("No selection");
       this.ui.details.setText(this.mode === "multiplayer" && !this.isHost && !this.state.snapshotSeen ? "Waiting for host world state..." : "Workers gather and build. Barracks train troops.");
     } else if (this.state.selected.length === 1) {
@@ -1675,15 +1962,32 @@ export class GameScene extends Phaser.Scene {
     const scaleX = width / MAP_WIDTH;
     const scaleY = height / MAP_HEIGHT;
     this.state.resourcesNodes.forEach((entry) => {
+      if (!this.isPointExplored(entry.x, entry.y)) return;
       this.minimap.fillStyle(RESOURCE_TYPES[entry.type].color, 0.8);
       this.minimap.fillRect(x + entry.x * scaleX, y + entry.y * scaleY, 2, 2);
     });
     this.roster.forEach((entry) => {
       const faction = FACTION_DEFS[entry.faction];
       this.minimap.fillStyle(faction.color, 0.95);
-      this.state.units.filter((unit) => unit.ownerId === entry.playerId).forEach((unit) => this.minimap.fillRect(x + unit.x * scaleX, y + unit.y * scaleY, 3, 3));
-      this.state.buildings.filter((building) => building.ownerId === entry.playerId).forEach((building) => this.minimap.fillRect(x + building.x * scaleX, y + building.y * scaleY, 4, 4));
+      this.state.units
+        .filter((unit) => unit.ownerId === entry.playerId && (entry.playerId === this.localPlayerId || this.isPointVisible(unit.x, unit.y)))
+        .forEach((unit) => this.minimap.fillRect(x + unit.x * scaleX, y + unit.y * scaleY, 3, 3));
+      this.state.buildings
+        .filter((building) => building.ownerId === entry.playerId && (entry.playerId === this.localPlayerId || this.isPointVisible(building.x, building.y)))
+        .forEach((building) => this.minimap.fillRect(x + building.x * scaleX, y + building.y * scaleY, 4, 4));
     });
+    const fog = this.state.fog;
+    if (fog) {
+      for (let row = 0; row < fog.rows; row += 1) {
+        for (let col = 0; col < fog.cols; col += 1) {
+          const idx = row * fog.cols + col;
+          if (fog.visible[idx]) continue;
+          const alpha = fog.explored[idx] ? 0.35 : 0.88;
+          this.minimap.fillStyle(0x060708, alpha);
+          this.minimap.fillRect(x + col * fog.cellSize * scaleX, y + row * fog.cellSize * scaleY, fog.cellSize * scaleX, fog.cellSize * scaleY);
+        }
+      }
+    }
     const cam = this.cameras.main;
     this.minimap.lineStyle(1, 0xf5f1d5, 0.9);
     this.minimap.strokeRect(x + cam.scrollX * scaleX, y + cam.scrollY * scaleY, cam.width / cam.zoom * scaleX, cam.height / cam.zoom * scaleY);
@@ -1731,7 +2035,8 @@ export class GameScene extends Phaser.Scene {
           type: entry.type,
           x: entry.x,
           y: entry.y,
-          amount: entry.amount
+          amount: entry.amount,
+          maxAmount: entry.maxAmount
         }))
       }
     };
@@ -1761,18 +2066,24 @@ export class GameScene extends Phaser.Scene {
       this.state.resourcesNodes.filter((entry) => !incomingIds.has(entry.id)).forEach((entry) => {
         entry.shadow.destroy();
         entry.sprite.destroy();
+        entry.amountPlate?.destroy();
+        entry.amountText?.destroy();
+        entry.decorations?.forEach((part) => part.destroy());
         entry.dead = true;
       });
       this.state.resourcesNodes = this.state.resourcesNodes.filter((entry) => incomingIds.has(entry.id));
       entries.forEach((data) => {
         let entity = this.state.resourcesNodes.find((entry) => entry.id === data.id);
-        if (!entity) entity = this.spawnResource(data.type, data.x, data.y, data.amount);
+        if (!entity) entity = this.spawnResource(data.type, data.x, data.y, data.amount, { fixedId: data.id, maxAmount: data.maxAmount ?? data.amount });
         entity.id = data.id;
         entity.x = data.x;
         entity.y = data.y;
         entity.amount = data.amount;
+        entity.maxAmount = data.maxAmount ?? entity.maxAmount ?? data.amount;
         entity.sprite.setPosition(entity.x, entity.y);
         entity.shadow.setPosition(entity.x, entity.y + 20);
+        if (entity.amountPlate) entity.amountPlate.setPosition(entity.x, entity.y + 34);
+        if (entity.amountText) entity.amountText.setPosition(entity.x, entity.y + 34);
       });
       return;
     }
