@@ -12,28 +12,28 @@ const SPAWNS = [
 
 const FACTION_UNIT_VISUALS = {
   kingdom: {
-    scale: 2.25,
-    worker: [113, 131],
-    swordsman: [131, 151],
-    archer: [151, 170]
+    scale: 2.2,
+    worker: [106, 107],
+    swordsman: [107, 161],
+    archer: [178, 179]
   },
   wildkin: {
-    scale: 2.25,
-    worker: [131, 151],
-    swordsman: [170, 189],
-    archer: [151, 170]
+    scale: 2.2,
+    worker: [106, 107],
+    swordsman: [161, 107],
+    archer: [178, 179]
   },
   dusk: {
-    scale: 2.25,
-    worker: [151, 170],
-    swordsman: [170, 189],
-    archer: [189, 151]
+    scale: 2.2,
+    worker: [106, 107],
+    swordsman: [107, 161],
+    archer: [179, 178]
   },
   ember: {
-    scale: 2.25,
-    worker: [170, 189],
-    swordsman: [189, 131],
-    archer: [170, 113]
+    scale: 2.2,
+    worker: [106, 107],
+    swordsman: [161, 107],
+    archer: [178, 179]
   }
 };
 
@@ -52,12 +52,12 @@ const BUILDING_FRAME_OFFSETS = {
 };
 
 const RESOURCE_VISUALS = {
-  wood: { frame: 112, scale: 2.4, shadowScale: [1.15, 0.9] },
-  gold: { frame: 4, scale: 2.9, shadowScale: [1.45, 1.05] }
+  wood: { frame: 137, scale: 2.55, shadowScale: [1.22, 0.96] },
+  gold: { frame: 5, scale: 2.7, shadowScale: [1.3, 0.95] }
 };
 
-const WOOD_CLUSTER_FRAMES = [112, 118, 119, 130, 149, 168, 187];
-const FOG_CELL_SIZE = 56;
+const WOOD_CLUSTER_FRAMES = [99, 118, 119, 137, 138, 139];
+const FOG_CELL_SIZE = 44;
 
 const COMMAND_GRID_KEYS = [
   { code: Phaser.Input.Keyboard.KeyCodes.Q, label: "Q" },
@@ -425,7 +425,7 @@ export class GameScene extends Phaser.Scene {
       const explored = this.isPointExplored(node.x, node.y);
       const visible = this.isPointVisible(node.x, node.y);
       node.shadow.setVisible(explored).setAlpha(visible ? 0.22 : 0.12);
-      node.sprite.setVisible(explored && node.type === "gold").setAlpha(visible ? 1 : 0.6);
+      node.sprite.setVisible(explored).setAlpha(visible ? 1 : 0.6);
       if (node.amountPlate) node.amountPlate.setVisible(explored).setAlpha(visible ? 0.76 : 0.5);
       if (node.amountText) {
         node.amountText
@@ -483,18 +483,35 @@ export class GameScene extends Phaser.Scene {
   spawnStartingResources(baseX, baseY, slotIndex) {
     const dir = this.getSpawnDirection(slotIndex);
     const perpendicular = { x: -dir.y, y: dir.x };
-    this.spawnResource("gold", baseX + dir.x * 178, baseY + dir.y * 132, 2600, { maxAmount: 2600 });
-    this.spawnWoodCluster(baseX + dir.x * 248 + perpendicular.x * 74, baseY + dir.y * 196 + perpendicular.y * 74, 2, 86, 2300);
-    this.spawnWoodCluster(baseX + dir.x * 228 - perpendicular.x * 76, baseY + dir.y * 168 - perpendicular.y * 76, 2, 76, 2200);
+    this.spawnResource("gold", baseX + dir.x * 208, baseY + dir.y * 152, 2600, { maxAmount: 2600 });
+    this.spawnWoodCluster(baseX + dir.x * 296 + perpendicular.x * 122, baseY + dir.y * 224 + perpendicular.y * 122, 3, 92, 2300);
+    this.spawnWoodCluster(baseX + dir.x * 318 - perpendicular.x * 118, baseY + dir.y * 236 - perpendicular.y * 118, 3, 92, 2300);
   }
 
   spawnWoodCluster(centerX, centerY, nodes = 3, spread = 120, amount = 2200) {
     for (let i = 0; i < nodes; i += 1) {
-      const angle = (Math.PI * 2 * i) / nodes + Phaser.Math.FloatBetween(-0.4, 0.4);
-      const radius = Phaser.Math.Between(Math.floor(spread * 0.35), spread);
-      this.spawnResource("wood", centerX + Math.cos(angle) * radius, centerY + Math.sin(angle) * radius, amount, {
-        maxAmount: amount
-      });
+      let placed = false;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+        const radius = Phaser.Math.Between(Math.floor(spread * 0.28), spread);
+        const candidate = {
+          x: centerX + Math.cos(angle) * radius,
+          y: centerY + Math.sin(angle) * radius
+        };
+        if (candidate.x < 120 || candidate.y < 120 || candidate.x > MAP_WIDTH - 120 || candidate.y > MAP_HEIGHT - 120) {
+          continue;
+        }
+        const hasSpace = this.state.resourcesNodes.every((entry) => distanceSq(entry, candidate) > 82 * 82);
+        if (!hasSpace) {
+          continue;
+        }
+        this.spawnResource("wood", candidate.x, candidate.y, amount, { maxAmount: amount });
+        placed = true;
+        break;
+      }
+      if (!placed) {
+        this.spawnResource("wood", centerX + i * 42 - nodes * 20, centerY + i * 28 - nodes * 12, amount, { maxAmount: amount });
+      }
     }
   }
 
@@ -854,31 +871,36 @@ export class GameScene extends Phaser.Scene {
     let amountText = null;
 
     if (type === "wood") {
-      sprite.setAlpha(0.001);
-      for (let i = 0; i < 14; i += 1) {
-        const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-        const radius = Phaser.Math.Between(10, 52);
-        const offsetX = Math.cos(angle) * radius;
-        const offsetY = Math.sin(angle) * radius * 0.65;
-        const tree = this.add
-          .image(x + offsetX, y + offsetY, "tinyBattleTiles", Phaser.Utils.Array.GetRandom(WOOD_CLUSTER_FRAMES))
-          .setScale(Phaser.Math.FloatBetween(2.15, 2.7))
-          .setTint(
-            Phaser.Display.Color.GetColor(
-              Phaser.Math.Between(138, 188),
-              Phaser.Math.Between(176, 230),
-              Phaser.Math.Between(118, 164)
-            )
+      sprite
+        .setFrame(Phaser.Utils.Array.GetRandom(WOOD_CLUSTER_FRAMES))
+        .setScale(Phaser.Math.FloatBetween(2.35, 2.75))
+        .setTint(
+          Phaser.Display.Color.GetColor(
+            Phaser.Math.Between(126, 160),
+            Phaser.Math.Between(165, 210),
+            Phaser.Math.Between(102, 138)
           )
-          .setDepth(y + offsetY + 8);
-        decorations.push(tree);
-      }
+        )
+        .setDepth(y + 8);
+      const crown = this.add
+        .image(x + Phaser.Math.Between(-8, 8), y - Phaser.Math.Between(10, 18), "tinyBattleTiles", Phaser.Utils.Array.GetRandom(WOOD_CLUSTER_FRAMES))
+        .setScale(Phaser.Math.FloatBetween(2.1, 2.45))
+        .setTint(
+          Phaser.Display.Color.GetColor(
+            Phaser.Math.Between(132, 166),
+            Phaser.Math.Between(176, 218),
+            Phaser.Math.Between(108, 145)
+          )
+        )
+        .setAlpha(0.95)
+        .setDepth(y + 10);
+      decorations.push(crown);
     } else {
-      amountPlate = this.add.rectangle(x, y + 34, 74, 16, 0x130f0c, 0.76).setStrokeStyle(1, 0x5a4a30, 0.95).setDepth(y + 36);
+      amountPlate = this.add.rectangle(x, y + 34, 82, 16, 0x130f0c, 0.76).setStrokeStyle(1, 0x5a4a30, 0.95).setDepth(y + 36);
       amountText = this.add.text(x, y + 34, `${Math.floor(amount)}`, { fontSize: "11px", color: "#f4d986" }).setOrigin(0.5).setDepth(y + 37);
-      const rim = this.add.circle(x, y + 2, 40, 0x2b2115, 0.22).setStrokeStyle(1, 0x78603c, 0.5).setDepth(y - 12);
+      const rim = this.add.circle(x, y + 4, 34, 0x2b2115, 0.18).setStrokeStyle(1, 0x78603c, 0.45).setDepth(y - 12);
       decorations.push(rim);
-      sprite.setTint(0xf3d58b);
+      sprite.setTint(0xe7c778).setDepth(y + 4);
     }
 
     this.resourceLayer.add([shadow, ...decorations, sprite, amountPlate, amountText].filter(Boolean));
