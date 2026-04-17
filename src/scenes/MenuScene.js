@@ -3,6 +3,17 @@ import { FACTION_DEFS, FACTION_ORDER } from "../game/factions.js";
 import { NetClient } from "../network/Client.js";
 import { loginWithCustomId, updateUserTitleDisplayName } from "../network/PlayFabClient.js";
 
+const WS_OVERRIDE_KEY = "ironfront.multiplayer.ws";
+
+function isLoopbackUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 export class MenuScene extends Phaser.Scene {
   constructor() {
     super("menu");
@@ -10,16 +21,14 @@ export class MenuScene extends Phaser.Scene {
 
   create() {
     this.netClient = null;
-    this.pendingLobby = null;
     this.selectedFaction = "kingdom";
     this.playerName = `Commander ${Phaser.Math.Between(10, 99)}`;
-    this.serverUrl =
-      import.meta.env.VITE_MULTIPLAYER_WS_URL ||
-      `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:2567`;
     this.playFabIdentity = null;
     this.lobbyState = null;
     this.isLobbyHost = false;
     this.isPublicSite = window.location.hostname.includes("github.io");
+    this.connectionPromise = null;
+    this.serverUrl = this.resolveServerUrl();
 
     const { width, height } = this.scale;
     const bg = this.add.graphics();
@@ -43,7 +52,7 @@ export class MenuScene extends Phaser.Scene {
       56,
       736,
       this.isPublicSite
-        ? "Public site: solo works here. Multiplayer needs a separate running WebSocket backend."
+        ? "Public site: solo works here. Multiplayer needs external WSS server URL."
         : "Local build: start the Node websocket server before using multiplayer.",
       { fontSize: "15px", color: "#aa9f8f", wordWrap: { width: 780 } }
     );
@@ -75,6 +84,9 @@ export class MenuScene extends Phaser.Scene {
       this.lobbyPlayersText,
       this.startMatchButton.startBox,
       this.startMatchButton.startText,
+      this.serverApplyButton.box,
+      this.serverApplyButton.text,
+      this.serverUrlText,
       this.renameButton.box,
       this.renameButton.text
     ];
@@ -171,7 +183,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   createMultiplayerPanel(width, height) {
-    this.add.rectangle(width - 372, 92, 320, 320, 0x171411, 0.9).setOrigin(0).setStrokeStyle(2, 0x6f5c45, 0.95);
+    this.add.rectangle(width - 372, 92, 320, 420, 0x171411, 0.9).setOrigin(0).setStrokeStyle(2, 0x6f5c45, 0.95);
     this.add.text(width - 350, 112, "Multiplayer Lobby", {
       fontFamily: "Georgia",
       fontSize: "28px",
@@ -179,17 +191,28 @@ export class MenuScene extends Phaser.Scene {
     });
     this.add.text(width - 350, 150, "Name", { fontSize: "15px", color: "#b9b1a4" });
     this.add.text(width - 350, 216, "Room Code", { fontSize: "15px", color: "#b9b1a4" });
+    this.add.text(width - 350, 282, "Server WS URL", { fontSize: "15px", color: "#b9b1a4" });
 
-    this.lobbyRoomText = this.add.text(width - 350, 272, "Room: none", { fontSize: "18px", color: "#f4efe2" });
-    this.lobbyPlayersText = this.add.text(width - 350, 308, "Players:\n-", {
+    this.serverUrlText = this.add.text(width - 350, 390, `WS: ${this.serverUrl || "not set"}`, {
+      fontSize: "14px",
+      color: "#aa9f8f",
+      wordWrap: { width: 260 }
+    });
+    this.lobbyRoomText = this.add.text(width - 350, 418, "Room: none", { fontSize: "18px", color: "#f4efe2" });
+    this.lobbyPlayersText = this.add.text(width - 350, 450, "Players:\n-", {
       fontSize: "16px",
       color: "#dfd9cf",
       lineSpacing: 7,
       wordWrap: { width: 260 }
     });
 
-    const startBox = this.add.rectangle(width - 350, 392, 260, 42, 0x2c241a, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
-    const startText = this.add.text(width - 220, 413, "Start Match", { fontSize: "19px", color: "#f4efe2" }).setOrigin(0.5);
+    const applyBox = this.add.rectangle(width - 350, 342, 260, 38, 0x2c241a, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
+    const applyText = this.add.text(width - 220, 361, "Apply Server URL", { fontSize: "17px", color: "#f4efe2" }).setOrigin(0.5);
+    applyBox.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.applyServerUrl());
+    this.serverApplyButton = { box: applyBox, text: applyText };
+
+    const startBox = this.add.rectangle(width - 350, 526, 260, 42, 0x2c241a, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
+    const startText = this.add.text(width - 220, 547, "Start Match", { fontSize: "19px", color: "#f4efe2" }).setOrigin(0.5);
     startBox.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
       if (this.isLobbyHost && this.netClient?.connected) {
         this.netClient.send("start_match");
@@ -221,6 +244,10 @@ export class MenuScene extends Phaser.Scene {
     this.nameInput = makeInput("Commander name", this.playerName);
     this.roomInput = makeInput("ABCDE", "");
     this.roomInput.maxLength = 5;
+    this.wsInput = makeInput("wss://your-server.example.com", this.serverUrl || "");
+    this.roomInput.addEventListener("input", () => {
+      this.roomInput.value = this.roomInput.value.toUpperCase();
+    });
 
     const positionInputs = () => {
       const width = this.scale.width;
@@ -230,7 +257,9 @@ export class MenuScene extends Phaser.Scene {
       this.roomInput.style.left = `${width - 350}px`;
       this.roomInput.style.top = "242px";
       this.roomInput.style.width = "236px";
-      this.roomInput.value = this.roomInput.value.toUpperCase();
+      this.wsInput.style.left = `${width - 350}px`;
+      this.wsInput.style.top = "308px";
+      this.wsInput.style.width = "236px";
     };
 
     positionInputs();
@@ -241,6 +270,7 @@ export class MenuScene extends Phaser.Scene {
   destroyHtmlInputs() {
     this.nameInput?.remove();
     this.roomInput?.remove();
+    this.wsInput?.remove();
     if (this.htmlInputsPositioner) {
       this.scale.off("resize", this.htmlInputsPositioner);
     }
@@ -285,27 +315,120 @@ export class MenuScene extends Phaser.Scene {
     }
   }
 
+  resolveServerUrl() {
+    const query = new URLSearchParams(window.location.search).get("ws")?.trim() ?? "";
+    if (query) {
+      localStorage.setItem(WS_OVERRIDE_KEY, query);
+    }
+    const stored = localStorage.getItem(WS_OVERRIDE_KEY)?.trim() ?? "";
+    const configured = (import.meta.env.VITE_MULTIPLAYER_WS_URL ?? "").trim();
+    const fallbackLocal = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:2567`;
+    const candidate = query || stored || configured || (this.isPublicSite ? "" : fallbackLocal);
+    if (this.isPublicSite && candidate && isLoopbackUrl(candidate)) {
+      return "";
+    }
+    return candidate;
+  }
+
+  normalizeWsUrl(raw) {
+    if (!raw) return "";
+    if (raw.startsWith("ws://") || raw.startsWith("wss://")) return raw;
+    const protocol = window.location.protocol === "https:" ? "wss://" : "ws://";
+    return `${protocol}${raw}`;
+  }
+
+  validateServerUrl(url) {
+    if (!url) {
+      return "Set server WS URL first.";
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return "WS URL is invalid.";
+    }
+
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return "WS URL must start with ws:// or wss://";
+    }
+    if (this.isPublicSite && parsed.protocol !== "wss:") {
+      return "Public site requires secure wss:// URL.";
+    }
+    if (this.isPublicSite && isLoopbackUrl(url)) {
+      return "localhost is not reachable from GitHub Pages clients.";
+    }
+    return null;
+  }
+
+  applyServerUrl() {
+    const value = this.normalizeWsUrl(this.wsInput?.value.trim() ?? "");
+    const error = this.validateServerUrl(value);
+    if (error) {
+      this.statusText.setText(error);
+      return;
+    }
+
+    this.serverUrl = value;
+    this.wsInput.value = this.serverUrl;
+    localStorage.setItem(WS_OVERRIDE_KEY, this.serverUrl);
+    this.serverUrlText.setText(`WS: ${this.serverUrl}`);
+
+    if (this.netClient) {
+      this.netClient.close();
+      this.netClient = null;
+      this.isLobbyHost = false;
+      this.setStartButtonEnabled(false);
+      this.lobbyPlayersText.setText("Players:\n-");
+      this.lobbyRoomText.setText("Room: none");
+    }
+
+    this.statusText.setText("Server URL saved.");
+  }
+
   async prepareNetwork() {
     if (this.netClient?.connected) {
       return this.netClient;
     }
-    if (this.isPublicSite && !import.meta.env.VITE_MULTIPLAYER_WS_URL) {
-      throw new Error("Multiplayer is not available on the static site without a deployed websocket server.");
+
+    if (this.connectionPromise) {
+      return this.connectionPromise;
     }
-    this.statusText.setText("Connecting to multiplayer server...");
-    const client = new NetClient(this.serverUrl);
-    const message = await client.connect();
-    this.netClient = client;
-    this.connectedPlayerId = message.playerId;
-    this.registerLobbyHandlers(client);
-    return client;
+
+    const nextServerUrl = this.normalizeWsUrl(this.wsInput?.value.trim() || this.serverUrl);
+    const validationError = this.validateServerUrl(nextServerUrl);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    this.serverUrl = nextServerUrl;
+    this.wsInput.value = this.serverUrl;
+    this.serverUrlText.setText(`WS: ${this.serverUrl}`);
+    localStorage.setItem(WS_OVERRIDE_KEY, this.serverUrl);
+
+    this.statusText.setText(`Connecting to ${this.serverUrl} ...`);
+
+    this.connectionPromise = (async () => {
+      const client = new NetClient(this.serverUrl);
+      const message = await client.connect(6500);
+      this.netClient = client;
+      this.connectedPlayerId = message.playerId;
+      this.registerLobbyHandlers(client);
+      return client;
+    })();
+
+    try {
+      return await this.connectionPromise;
+    } finally {
+      this.connectionPromise = null;
+    }
   }
 
   registerLobbyHandlers(client) {
-    if (this.lobbyHandlersRegistered) {
+    if (client.lobbyHandlersBound) {
       return;
     }
-    this.lobbyHandlersRegistered = true;
+    client.lobbyHandlersBound = true;
+
     client.on("room_created", (message) => {
       this.isLobbyHost = true;
       this.roomInput.value = message.roomCode;
@@ -340,6 +463,17 @@ export class MenuScene extends Phaser.Scene {
     client.on("error_message", (message) => {
       this.statusText.setText(message.message);
     });
+    client.on("socket_error", (message) => {
+      this.statusText.setText(message.message);
+    });
+    client.on("closed", () => {
+      this.netClient = null;
+      this.isLobbyHost = false;
+      this.setStartButtonEnabled(false);
+      if (!this.scene.isActive("game")) {
+        this.statusText.setText("Disconnected from multiplayer server.");
+      }
+    });
   }
 
   setStartButtonEnabled(enabled) {
@@ -367,11 +501,7 @@ export class MenuScene extends Phaser.Scene {
       this.playerName = this.nameInput?.value.trim() || this.playerName;
       client.send("create_room", { name: this.playerName, faction: this.selectedFaction });
     } catch (error) {
-      this.statusText.setText(
-        this.isPublicSite
-          ? "No multiplayer backend configured for the public site."
-          : "Could not connect. Start `npm run dev:server` first."
-      );
+      this.statusText.setText(error.message || "Could not connect to multiplayer backend.");
       console.error(error);
     }
   }
@@ -388,11 +518,7 @@ export class MenuScene extends Phaser.Scene {
       this.playerName = this.nameInput?.value.trim() || this.playerName;
       client.send("join_room", { roomCode, name: this.playerName, faction: this.selectedFaction });
     } catch (error) {
-      this.statusText.setText(
-        this.isPublicSite
-          ? "No multiplayer backend configured for the public site."
-          : "Could not connect. Start `npm run dev:server` first."
-      );
+      this.statusText.setText(error.message || "Could not connect to multiplayer backend.");
       console.error(error);
     }
   }

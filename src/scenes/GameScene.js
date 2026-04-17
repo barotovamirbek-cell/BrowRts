@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { BUILD_OPTIONS, BUILDING_DEFS, MAP_HEIGHT, MAP_WIDTH, RESOURCE_TYPES, UNIT_DEFS } from "../game/defs.js";
+import { BUILDING_DEFS, MAP_HEIGHT, MAP_WIDTH, RESOURCE_TYPES, UNIT_DEFS } from "../game/defs.js";
 import { FACTION_DEFS, FACTION_ORDER } from "../game/factions.js";
 import { clamp, distance, distanceSq, formatCost, makeSelectionRect, pointInRect } from "../game/utils.js";
 
@@ -9,6 +9,40 @@ const SPAWNS = [
   { x: 420, y: 520 },
   { x: 2820, y: 1600 }
 ];
+
+const UNIT_VISUALS = {
+  worker: { columns: [4, 5], attackColumns: [6, 7], scale: 2.35 },
+  swordsman: { columns: [8, 9], attackColumns: [10, 11], scale: 2.35 },
+  archer: { columns: [12, 13], attackColumns: [14, 15], scale: 2.35 }
+};
+
+const FACTION_UNIT_ROWS = {
+  kingdom: 7,
+  wildkin: 8,
+  ember: 10,
+  dusk: 11
+};
+
+const FACTION_BUILDING_BASE = {
+  kingdom: 16,
+  wildkin: 24,
+  ember: 32,
+  dusk: 40
+};
+
+const BUILDING_FRAME_OFFSETS = {
+  townhall: 6,
+  farm: 1,
+  barracks: 3,
+  tower: 7
+};
+
+const TERRAIN_DECOR_FRAMES = [96, 97, 98, 99, 100, 101, 102, 103];
+
+const RESOURCE_VISUALS = {
+  wood: { frame: 96, scale: 2.25, tint: 0xb9d4a3, shadowScale: [1.1, 0.82] },
+  gold: { frame: 104, scale: 2.25, tint: 0xf6d879, shadowScale: [1.25, 0.85] }
+};
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -60,6 +94,23 @@ export class GameScene extends Phaser.Scene {
     }
 
     return entries.slice(0, 4);
+  }
+
+  getUnitFrames(unitType, factionKey) {
+    const unitVisual = UNIT_VISUALS[unitType];
+    const row = FACTION_UNIT_ROWS[factionKey] ?? FACTION_UNIT_ROWS.kingdom;
+    const base = row * 16;
+    return {
+      idle: unitVisual.columns.map((column) => base + column),
+      move: unitVisual.columns.map((column) => base + column),
+      attack: unitVisual.attackColumns.map((column) => base + column),
+      scale: unitVisual.scale
+    };
+  }
+
+  getBuildingFrame(buildingType, factionKey) {
+    const base = FACTION_BUILDING_BASE[factionKey] ?? FACTION_BUILDING_BASE.kingdom;
+    return base + (BUILDING_FRAME_OFFSETS[buildingType] ?? 0);
   }
 
   create() {
@@ -127,21 +178,27 @@ export class GameScene extends Phaser.Scene {
   createMap() {
     this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
 
-    const bg = this.add.graphics();
-    bg.fillGradientStyle(0x1d2d20, 0x233d2a, 0x211614, 0x161110, 1);
-    bg.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    const grassBase = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 0).setOrigin(0);
+    grassBase.tileScaleX = 2;
+    grassBase.tileScaleY = 2;
 
-    for (let i = 0; i < 280; i += 1) {
-      const color = Phaser.Display.Color.GetColor(
-        Phaser.Math.Between(26, 64),
-        Phaser.Math.Between(40, 94),
-        Phaser.Math.Between(22, 58)
-      );
-      bg.fillStyle(color, 0.16);
-      bg.fillCircle(
+    const grassNoise = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 1).setOrigin(0).setAlpha(0.32);
+    grassNoise.tileScaleX = 2;
+    grassNoise.tileScaleY = 2;
+
+    const mossBand = this.add.tileSprite(0, 0, MAP_WIDTH, MAP_HEIGHT, "tinyBattleTiles", 2).setOrigin(0).setAlpha(0.2);
+    mossBand.tileScaleX = 2;
+    mossBand.tileScaleY = 2;
+
+    const vignette = this.add.graphics();
+    vignette.fillStyle(0x1a140f, 0.2);
+    vignette.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    vignette.fillStyle(0x2d5935, 0.12);
+    for (let i = 0; i < 120; i += 1) {
+      vignette.fillCircle(
         Phaser.Math.Between(0, MAP_WIDTH),
         Phaser.Math.Between(0, MAP_HEIGHT),
-        Phaser.Math.Between(18, 58)
+        Phaser.Math.Between(20, 70)
       );
     }
 
@@ -168,27 +225,24 @@ export class GameScene extends Phaser.Scene {
       true
     );
 
+    this.overlayLayer = this.add.container();
     this.resourceLayer = this.add.container();
     this.buildingLayer = this.add.container();
     this.unitLayer = this.add.container();
     this.fxLayer = this.add.container();
-    this.overlayLayer = this.add.container();
 
-    for (let i = 0; i < 120; i += 1) {
-      const shrub = this.add.ellipse(
+    for (let i = 0; i < 210; i += 1) {
+      const decor = this.add.image(
         Phaser.Math.Between(0, MAP_WIDTH),
         Phaser.Math.Between(0, MAP_HEIGHT),
-        Phaser.Math.Between(18, 42),
-        Phaser.Math.Between(10, 28),
-        Phaser.Display.Color.GetColor(
-          Phaser.Math.Between(40, 72),
-          Phaser.Math.Between(60, 98),
-          Phaser.Math.Between(26, 44)
-        ),
-        0.12
+        "tinyBattleTiles",
+        Phaser.Utils.Array.GetRandom(TERRAIN_DECOR_FRAMES)
       );
-      shrub.setAngle(Phaser.Math.Between(0, 180));
-      this.overlayLayer.add(shrub);
+      decor
+        .setScale(Phaser.Math.FloatBetween(1.4, 2.4))
+        .setAlpha(Phaser.Math.FloatBetween(0.3, 0.62))
+        .setAngle(Phaser.Math.Between(0, 360));
+      this.overlayLayer.add(decor);
     }
 
     this.selectionGraphics = this.add.graphics().setScrollFactor(0);
@@ -260,6 +314,7 @@ export class GameScene extends Phaser.Scene {
         align: "right"
       }).setOrigin(1, 0).setScrollFactor(0),
       minimapFrame: this.add.rectangle(width - 208, height - 146, 188, 128, 0x1f1916, 0.92).setOrigin(0).setStrokeStyle(2, 0x79674f, 0.95).setScrollFactor(0),
+      minimapHitbox: this.add.rectangle(width - 208, height - 146, 188, 128, 0x000000, 0.001).setOrigin(0).setScrollFactor(0),
       result: this.add.text(width / 2, 80, "", {
         fontFamily: "Georgia",
         fontSize: "42px",
@@ -271,6 +326,14 @@ export class GameScene extends Phaser.Scene {
     };
 
     this.minimap = this.add.graphics().setScrollFactor(0);
+    this.ui.minimapHitbox
+      .setInteractive({ useHandCursor: true })
+      .on("pointerdown", (pointer) => this.handleMinimapNavigation(pointer))
+      .on("pointermove", (pointer) => {
+        if (pointer.isDown) {
+          this.handleMinimapNavigation(pointer);
+        }
+      });
     this.buildCommandButtons();
   }
 
@@ -312,9 +375,30 @@ export class GameScene extends Phaser.Scene {
       this.ui.roster.setPosition(width - 20, 70);
       this.ui.hint.setPosition(width - 20, height - 136);
       this.ui.minimapFrame.setPosition(width - 208, height - 146);
+      this.ui.minimapHitbox.setPosition(width - 208, height - 146);
       this.ui.result.setPosition(width / 2, 80);
       this.buildCommandButtons();
     });
+  }
+
+  isPointerOverMinimap(pointer) {
+    const frame = this.ui.minimapFrame;
+    return pointer.x >= frame.x && pointer.x <= frame.x + frame.width && pointer.y >= frame.y && pointer.y <= frame.y + frame.height;
+  }
+
+  handleMinimapNavigation(pointer) {
+    const frame = this.ui.minimapFrame;
+    const inset = 6;
+    const width = frame.width - inset * 2;
+    const height = frame.height - inset * 2;
+    const localX = clamp(pointer.x - frame.x - inset, 0, width);
+    const localY = clamp(pointer.y - frame.y - inset, 0, height);
+    const worldX = (localX / width) * MAP_WIDTH;
+    const worldY = (localY / height) * MAP_HEIGHT;
+    const cam = this.cameras.main;
+    cam.centerOn(worldX, worldY);
+    cam.scrollX = clamp(cam.scrollX, 0, MAP_WIDTH - cam.width / cam.zoom);
+    cam.scrollY = clamp(cam.scrollY, 0, MAP_HEIGHT - cam.height / cam.zoom);
   }
 
   setupInput() {
@@ -331,6 +415,10 @@ export class GameScene extends Phaser.Scene {
     this.dragSelect = { active: false, start: new Phaser.Math.Vector2(), end: new Phaser.Math.Vector2() };
 
     this.input.on("pointerdown", (pointer) => {
+      if (this.isPointerOverMinimap(pointer)) {
+        return;
+      }
+
       if (pointer.leftButtonDown()) {
         const worldPoint = pointer.positionToCamera(this.cameras.main);
         if (this.state.buildMode) {
@@ -377,10 +465,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   spawnResource(type, x, y, amount) {
-    const texture = type === "gold" ? "gold-mine" : "tree";
-    const scale = type === "gold" ? 1.4 : 1.2;
-    const shadow = this.add.image(x, y + 20, "shadow-oval").setScale(type === "gold" ? 1.15 : 0.8, 0.8).setAlpha(0.22).setTint(0x000000);
-    const sprite = this.add.image(x, y, texture).setTint(RESOURCE_TYPES[type].color).setScale(scale);
+    const visual = RESOURCE_VISUALS[type] ?? RESOURCE_VISUALS.wood;
+    const shadow = this.add
+      .image(x, y + 20, "shadow-oval")
+      .setScale(visual.shadowScale[0], visual.shadowScale[1])
+      .setAlpha(0.22)
+      .setTint(0x000000);
+    const sprite = this.add.image(x, y, "tinyBattleTiles", visual.frame).setScale(visual.scale).setTint(visual.tint);
     this.resourceLayer.add([shadow, sprite]);
     const node = { id: this.state.nextId++, kind: "resource", type, x, y, amount, sprite, shadow, radius: type === "gold" ? 30 : 26 };
     sprite.setData("entity", node);
@@ -392,14 +483,14 @@ export class GameScene extends Phaser.Scene {
     const owner = this.state.players[ownerId];
     const faction = owner.factionDef;
     const def = UNIT_DEFS[type];
-    const tint = faction.unitTints[type];
-    const texture = `unit-${type}`;
+    const frames = this.getUnitFrames(type, faction.key);
     const shadow = this.add.image(x, y + 14, "shadow-oval").setScale(0.62).setAlpha(0.26).setTint(0x000000);
-    const sprite = this.add.image(x, y, texture).setTint(tint);
+    const sprite = this.add.image(x, y, "tinyBattleTiles", frames.idle[0]).setScale(frames.scale);
+    const marker = this.add.circle(x, y - 16, 3, faction.color, 0.95).setStrokeStyle(1, 0x1a140f, 0.95);
     const hpBg = this.add.rectangle(x, y - 18, 30, 4, 0x000000, 0.6);
     const hpFill = this.add.rectangle(x - 15, y - 18, 30, 4, 0x6dd66d, 1).setOrigin(0, 0.5);
     const selection = this.add.circle(x, y, def.radius + 6).setStrokeStyle(2, 0xf4f1d0, 0.95).setVisible(false);
-    this.unitLayer.add([shadow, selection, sprite, hpBg, hpFill]);
+    this.unitLayer.add([shadow, selection, sprite, marker, hpBg, hpFill]);
 
     const entity = {
       id: fixedId ?? this.state.nextId++,
@@ -412,6 +503,7 @@ export class GameScene extends Phaser.Scene {
       hp: def.maxHp,
       shadow,
       sprite,
+      marker,
       hpBg,
       hpFill,
       selection,
@@ -423,7 +515,12 @@ export class GameScene extends Phaser.Scene {
       lastAttackAt: 0,
       carry: null,
       faction,
-      visualPhase: Phaser.Math.FloatBetween(0, Math.PI * 2)
+      visualPhase: Phaser.Math.FloatBetween(0, Math.PI * 2),
+      frames,
+      animIndex: 0,
+      animTime: 0,
+      prevX: x,
+      prevY: y
     };
 
     sprite.setData("entity", entity);
@@ -436,17 +533,18 @@ export class GameScene extends Phaser.Scene {
     const owner = this.state.players[ownerId];
     const faction = owner.factionDef;
     const def = BUILDING_DEFS[type];
+    const frame = this.getBuildingFrame(type, faction.key);
     const shadow = this.add.image(x, y + def.size * 0.34, "shadow-oval").setScale(def.size / 44, 1.05).setAlpha(0.22).setTint(0x000000);
-    const sprite = this.add.image(x, y, `building-${type}`).setDisplaySize(def.size, Math.round(def.size * 0.9)).setTint(faction.color);
+    const sprite = this.add.image(x, y, "tinyBattleTiles", frame).setDisplaySize(def.size, Math.round(def.size * 0.9));
+    const banner = this.add.rectangle(x, y - def.size * 0.35, Math.max(8, def.size * 0.22), Math.max(8, def.size * 0.18), faction.color, 0.95).setStrokeStyle(1, 0x18120e, 0.95);
     const hpBg = this.add.rectangle(x, y - def.size / 2 - 10, def.size, 6, 0x000000, 0.66);
     const hpFill = this.add.rectangle(x - def.size / 2, y - def.size / 2 - 10, def.size, 6, 0x6dd66d, 1).setOrigin(0, 0.5);
     const selection = this.add.rectangle(x, y, def.size + 10, def.size + 10).setStrokeStyle(2, 0xf4f1d0, 0.95).setVisible(false);
-    const label = this.add.text(x, y, def.label[0], {
-      fontFamily: "Georgia",
-      fontSize: `${Math.round(def.size * 0.38)}px`,
-      color: faction.ui
+    const label = this.add.text(x, y + def.size * 0.48, completed ? "" : "Building...", {
+      fontSize: "12px",
+      color: "#f4efe2"
     }).setOrigin(0.5);
-    this.buildingLayer.add([shadow, selection, sprite, label, hpBg, hpFill]);
+    this.buildingLayer.add([shadow, selection, sprite, banner, label, hpBg, hpFill]);
 
     const entity = {
       id: fixedId ?? this.state.nextId++,
@@ -459,6 +557,7 @@ export class GameScene extends Phaser.Scene {
       hp: completed ? def.maxHp : Math.ceil(def.maxHp * 0.25),
       shadow,
       sprite,
+      banner,
       hpBg,
       hpFill,
       selection,
@@ -467,12 +566,15 @@ export class GameScene extends Phaser.Scene {
       buildProgress: completed ? def.buildTime : 0,
       completed,
       rallyPoint: { x: x + 100, y: y + 30 },
-      lastAttackAt: 0
+      lastAttackAt: 0,
+      faction
     };
 
     if (!completed) {
       sprite.setAlpha(0.58);
       label.setAlpha(0.72);
+    } else {
+      label.setVisible(false);
     }
 
     sprite.setData("entity", entity);
@@ -713,12 +815,37 @@ export class GameScene extends Phaser.Scene {
         this.autoAcquireTarget(unit);
       }
 
+      const moveX = unit.x - unit.prevX;
+      const moveY = unit.y - unit.prevY;
+      const isMoving = Math.abs(moveX) + Math.abs(moveY) > 0.14;
+      if (moveX < -0.08) unit.sprite.setFlipX(true);
+      if (moveX > 0.08) unit.sprite.setFlipX(false);
+
+      unit.animTime += dt * 1000;
+      const animCadence = unit.state === "attacking" ? 110 : isMoving ? 150 : 240;
+      if (unit.animTime >= animCadence) {
+        unit.animTime = 0;
+        unit.animIndex = (unit.animIndex + 1) % 2;
+      }
+      const frameSet =
+        unit.state === "attacking"
+          ? unit.frames.attack
+          : isMoving || unit.state === "gathering" || unit.state === "returning" || unit.state === "building"
+            ? unit.frames.move
+            : unit.frames.idle;
+      unit.sprite.setFrame(frameSet[unit.animIndex % frameSet.length]);
+
+      const attackLift = unit.state === "attacking" ? Math.sin(now * 0.025 + unit.visualPhase) * 1.2 : 0;
       const bob = Math.sin(now * 0.006 + unit.visualPhase) * 1.8;
       unit.shadow.setPosition(unit.x, unit.y + 14).setAlpha(0.2 + Math.abs(bob) * 0.018).setDepth(unit.y - 20);
-      unit.sprite.setPosition(unit.x, unit.y + bob).setDepth(unit.y + 2);
+      unit.sprite.setPosition(unit.x, unit.y + bob - attackLift).setDepth(unit.y + 2);
+      unit.marker.setPosition(unit.x, unit.y - 16 + bob).setDepth(unit.y + 4);
       unit.selection.setPosition(unit.x, unit.y).setDepth(unit.y - 2);
       unit.hpBg.setPosition(unit.x, unit.y - 22 + bob).setDepth(unit.y + 8);
       unit.hpFill.setPosition(unit.x - 15, unit.y - 22 + bob).setDisplaySize(30 * (unit.hp / unit.def.maxHp), 4).setDepth(unit.y + 9);
+
+      unit.prevX = unit.x;
+      unit.prevY = unit.y;
     });
   }
 
@@ -736,7 +863,42 @@ export class GameScene extends Phaser.Scene {
     }
     if (now - attacker.lastAttackAt < attacker.def.attackCooldown) return;
     attacker.lastAttackAt = now;
-    this.applyDamage(target, this.getDamage(attacker), attacker);
+    this.performAttack(attacker, target);
+  }
+
+  performAttack(attacker, target) {
+    const isRanged = attacker.kind === "building" || attacker.type === "archer";
+    if (!isRanged) {
+      this.applyDamage(target, this.getDamage(attacker), attacker);
+      return;
+    }
+
+    const projectileKey = attacker.kind === "building" ? "projectile" : "projectile-arrow";
+    const startX = attacker.x;
+    const startY = attacker.kind === "building" ? attacker.y - attacker.def.size * 0.22 : attacker.y - 4;
+    const shot = this.add.image(startX, startY, projectileKey).setDepth(startY + 20);
+    if (projectileKey === "projectile") {
+      shot.setScale(1.2).setTint(0xffc27a);
+    } else {
+      shot.setScale(0.9).setTint(attacker.faction?.color ?? 0xf4efe2);
+      shot.setRotation(Phaser.Math.Angle.Between(startX, startY, target.x, target.y));
+    }
+    this.fxLayer.add(shot);
+
+    const travelMs = clamp((distance({ x: startX, y: startY }, target) / (attacker.def.projectileSpeed ?? 420)) * 1000, 110, 620);
+    this.tweens.add({
+      targets: shot,
+      x: target.x,
+      y: target.y - (target.kind === "building" ? target.def.size * 0.2 : 4),
+      duration: travelMs,
+      ease: "Linear",
+      onComplete: () => {
+        shot.destroy();
+        if (!target.dead) {
+          this.applyDamage(target, this.getDamage(attacker), attacker);
+        }
+      }
+    });
   }
 
   updateWorkerGather(unit, dt) {
@@ -808,7 +970,7 @@ export class GameScene extends Phaser.Scene {
     if (building.buildProgress >= building.def.buildTime) {
       building.completed = true;
       building.sprite.setAlpha(1);
-      building.label.setAlpha(1);
+      building.label.setVisible(false);
       building.hp = building.def.maxHp;
       unit.state = "idle";
       unit.buildTarget = null;
@@ -834,12 +996,21 @@ export class GameScene extends Phaser.Scene {
           .sort((a, b) => distanceSq(building, a) - distanceSq(building, b))[0];
         if (target && distance(building, target) <= building.def.range && now - building.lastAttackAt >= building.def.attackCooldown) {
           building.lastAttackAt = now;
-          this.applyDamage(target, building.def.damage, building);
+          this.performAttack(building, target);
         }
       }
-      building.sprite.setPosition(building.x, building.y);
+      building.sprite.setPosition(building.x, building.y).setDepth(building.y + 2);
       building.shadow.setPosition(building.x, building.y + building.def.size * 0.34).setDepth(building.y - 10);
-      building.label.setPosition(building.x, building.y);
+      building.banner.setPosition(building.x, building.y - building.def.size * 0.35).setDepth(building.y + 5);
+      if (!building.completed) {
+        building.label
+          .setVisible(true)
+          .setText(`${Math.floor((building.buildProgress / building.def.buildTime) * 100)}%`)
+          .setPosition(building.x, building.y + building.def.size * 0.48)
+          .setDepth(building.y + 8);
+      } else {
+        building.label.setVisible(false);
+      }
       building.selection.setPosition(building.x, building.y);
       building.hpBg.setPosition(building.x, building.y - building.def.size / 2 - 10);
       building.hpFill.setPosition(building.x - building.def.size / 2, building.y - building.def.size / 2 - 10);
@@ -1083,6 +1254,7 @@ export class GameScene extends Phaser.Scene {
       if (!entry.dead) return true;
       entry.shadow.destroy();
       entry.sprite.destroy();
+      entry.marker.destroy();
       entry.hpBg.destroy();
       entry.hpFill.destroy();
       entry.selection.destroy();
@@ -1092,6 +1264,7 @@ export class GameScene extends Phaser.Scene {
       if (!entry.dead) return true;
       entry.shadow.destroy();
       entry.sprite.destroy();
+      entry.banner.destroy();
       entry.hpBg.destroy();
       entry.hpFill.destroy();
       entry.selection.destroy();
@@ -1319,7 +1492,7 @@ export class GameScene extends Phaser.Scene {
     if (kind === "unit") {
       const incomingIds = new Set(entries.map((entry) => entry.id));
       this.state.units.filter((entry) => !incomingIds.has(entry.id)).forEach((entry) => {
-        entry.shadow.destroy(); entry.sprite.destroy(); entry.hpBg.destroy(); entry.hpFill.destroy(); entry.selection.destroy(); entry.dead = true;
+        entry.shadow.destroy(); entry.sprite.destroy(); entry.marker.destroy(); entry.hpBg.destroy(); entry.hpFill.destroy(); entry.selection.destroy(); entry.dead = true;
       });
       this.state.units = this.state.units.filter((entry) => incomingIds.has(entry.id));
       entries.forEach((data) => {
@@ -1332,8 +1505,11 @@ export class GameScene extends Phaser.Scene {
         entity.state = data.state;
         entity.shadow.setPosition(entity.x, entity.y + 14);
         entity.sprite.setPosition(entity.x, entity.y);
+        entity.marker.setPosition(entity.x, entity.y - 16);
         entity.hpBg.setPosition(entity.x, entity.y - 22);
         entity.hpFill.setPosition(entity.x - 15, entity.y - 22).setDisplaySize(30 * (entity.hp / entity.def.maxHp), 4);
+        entity.prevX = entity.x;
+        entity.prevY = entity.y;
       });
       return;
     }
@@ -1341,7 +1517,7 @@ export class GameScene extends Phaser.Scene {
     if (kind === "building") {
       const incomingIds = new Set(entries.map((entry) => entry.id));
       this.state.buildings.filter((entry) => !incomingIds.has(entry.id)).forEach((entry) => {
-        entry.shadow.destroy(); entry.sprite.destroy(); entry.hpBg.destroy(); entry.hpFill.destroy(); entry.selection.destroy(); entry.label.destroy(); entry.dead = true;
+        entry.shadow.destroy(); entry.sprite.destroy(); entry.banner.destroy(); entry.hpBg.destroy(); entry.hpFill.destroy(); entry.selection.destroy(); entry.label.destroy(); entry.dead = true;
       });
       this.state.buildings = this.state.buildings.filter((entry) => incomingIds.has(entry.id));
       entries.forEach((data) => {
@@ -1356,7 +1532,16 @@ export class GameScene extends Phaser.Scene {
         entity.rallyPoint = data.rallyPoint;
         entity.shadow.setPosition(entity.x, entity.y + entity.def.size * 0.34);
         entity.sprite.setPosition(entity.x, entity.y).setAlpha(entity.completed ? 1 : 0.58);
-        entity.label.setPosition(entity.x, entity.y).setAlpha(entity.completed ? 1 : 0.72);
+        entity.banner.setPosition(entity.x, entity.y - entity.def.size * 0.35);
+        if (entity.completed) {
+          entity.label.setVisible(false);
+        } else {
+          entity.label
+            .setVisible(true)
+            .setPosition(entity.x, entity.y + entity.def.size * 0.48)
+            .setText(`${Math.floor((entity.buildProgress / entity.def.buildTime) * 100)}%`)
+            .setAlpha(0.72);
+        }
         entity.hpBg.setPosition(entity.x, entity.y - entity.def.size / 2 - 10);
         entity.hpFill.setPosition(entity.x - entity.def.size / 2, entity.y - entity.def.size / 2 - 10).setDisplaySize(entity.def.size * (entity.hp / entity.def.maxHp), 6);
       });

@@ -18,6 +18,12 @@ Fantasy RTS on Phaser with four factions and optional WebSocket multiplayer.
 - Vite
 - Node.js WebSocket server via `ws`
 
+## Art Assets
+
+- Kenney `tiny-dungeon` (CC0)
+- Kenney `tiny-battle` (CC0)
+- local copy and license files: `public/assets/kenney`
+
 ## Run
 
 Install dependencies:
@@ -70,6 +76,12 @@ Default local server address:
 - client: `http://127.0.0.1:5173/`
 - WebSocket server: `ws://localhost:2567`
 
+On public deployments you can set server URL directly in menu:
+
+- field: `Server WS URL`
+- button: `Apply Server URL`
+- requirement on `https` site: use `wss://...` (not `ws://...`)
+
 ## Controls
 
 - `LMB`: select unit or building
@@ -93,6 +105,14 @@ Important:
 - multiplayer needs a separately running WebSocket server
 
 If you want online multiplayer on the public site, deploy `server/server.js` on a real Node host and point the client to that WebSocket URL.
+
+Cheap/free options for relay host:
+
+- Render Web Service (free tier)
+- Railway
+- Fly.io
+
+After deploying, paste your `wss://...` endpoint into `Server WS URL` in menu.
 
 ## PlayFab
 

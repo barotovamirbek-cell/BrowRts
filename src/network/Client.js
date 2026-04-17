@@ -6,7 +6,18 @@ export class NetClient {
     this.connected = false;
   }
 
+  emit(type, payload = {}) {
+    const handler = this.handlers.get(type);
+    if (handler) {
+      handler({ type, ...payload });
+    }
+  }
+
   connect(timeoutMs = 5000) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      return Promise.resolve({ type: "connected", playerId: null });
+    }
+
     return new Promise((resolve, reject) => {
       let settled = false;
       const finishResolve = (value) => {
@@ -22,6 +33,11 @@ export class NetClient {
         reject(error);
       };
 
+      this.connected = false;
+      if (this.socket && this.socket.readyState < WebSocket.CLOSING) {
+        this.socket.close();
+      }
+
       const timeoutId = setTimeout(() => {
         try {
           this.socket?.close();
@@ -36,20 +52,24 @@ export class NetClient {
         this.connected = true;
       });
       this.socket.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data);
+        let message;
+        try {
+          message = JSON.parse(event.data);
+        } catch {
+          return;
+        }
         if (message.type === "connected") {
           finishResolve(message);
         }
-        const handler = this.handlers.get(message.type);
-        if (handler) {
-          handler(message);
-        }
+        this.emit(message.type, message);
       });
       this.socket.addEventListener("error", () => {
+        this.emit("socket_error", { message: `WebSocket error: ${this.url}` });
         finishReject(new Error(`WebSocket error: ${this.url}`));
       });
       this.socket.addEventListener("close", () => {
         this.connected = false;
+        this.emit("closed", { message: `Connection closed: ${this.url}` });
         if (!settled) {
           finishReject(new Error(`Connection closed: ${this.url}`));
         }
@@ -62,9 +82,17 @@ export class NetClient {
   }
 
   send(type, payload = {}) {
-    if (!this.connected) {
+    if (!this.connected || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
     this.socket.send(JSON.stringify({ type, ...payload }));
+  }
+
+  close() {
+    this.connected = false;
+    if (this.socket && this.socket.readyState < WebSocket.CLOSING) {
+      this.socket.close();
+    }
+    this.socket = null;
   }
 }
