@@ -404,21 +404,11 @@ export class GameScene extends Phaser.Scene {
     cam.scrollY = clamp(cam.scrollY, 0, MAP_HEIGHT - cam.height / cam.zoom);
   }
 
-  isPointerOverHud(pointer) {
-    if (!this.ui) return false;
-    const { x, y } = pointer;
-
-    const topBounds = this.ui.topBar.getBounds();
-    if (x >= topBounds.left && x <= topBounds.right && y >= topBounds.top && y <= topBounds.bottom) {
-      return true;
-    }
-
-    const bottomBounds = this.ui.bottomBar.getBounds();
-    if (x >= bottomBounds.left && x <= bottomBounds.right && y >= bottomBounds.top && y <= bottomBounds.bottom) {
-      return true;
-    }
-
-    return false;
+  isPointerInWorldArea(pointer) {
+    const y = pointer.y;
+    const topUiHeight = 54;
+    const bottomUiHeight = 160;
+    return y > topUiHeight && y < this.scale.height - bottomUiHeight;
   }
 
   setupInput() {
@@ -438,7 +428,7 @@ export class GameScene extends Phaser.Scene {
       if (this.isPointerOverMinimap(pointer)) {
         return;
       }
-      if (this.isPointerOverHud(pointer)) {
+      if (!this.isPointerInWorldArea(pointer)) {
         return;
       }
 
