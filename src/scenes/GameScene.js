@@ -449,15 +449,16 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.input.on("pointerup", (pointer) => {
-      if (pointer.button !== 0 || !this.dragSelect.active) {
+      if (!this.dragSelect.active) {
         return;
       }
       this.dragSelect.active = false;
       const rect = makeSelectionRect(this.dragSelect.start, this.dragSelect.end);
+      const withShift = Boolean(pointer.event?.shiftKey);
       if (rect.width < 10 && rect.height < 10) {
-        this.handleSingleSelection(pointer.positionToCamera(this.cameras.main), pointer.event.shiftKey);
+        this.handleSingleSelection(pointer.positionToCamera(this.cameras.main), withShift);
       } else {
-        this.selectInRect(rect, pointer.event.shiftKey);
+        this.selectInRect(rect, withShift);
       }
       this.selectionGraphics.clear();
     });
@@ -667,7 +668,7 @@ export class GameScene extends Phaser.Scene {
     const hits = [
       ...this.state.units.filter((entry) => distanceSq(entry, worldPoint) <= (entry.def.radius + 4) ** 2),
       ...this.state.buildings.filter((entry) => {
-        const half = entry.def.size / 2;
+        const half = entry.def.size * 0.6;
         return worldPoint.x >= entry.x - half && worldPoint.x <= entry.x + half && worldPoint.y >= entry.y - half && worldPoint.y <= entry.y + half;
       }),
       ...this.state.resourcesNodes.filter((entry) => distanceSq(entry, worldPoint) <= entry.radius ** 2)
@@ -754,8 +755,15 @@ export class GameScene extends Phaser.Scene {
       if (command.kind === "place_building") {
         const def = BUILDING_DEFS[command.buildingType];
         if (!def) return;
-        if (!this.canPlaceBuilding(command.buildingType, command.point.x, command.point.y).ok) return;
-        if (!this.payCost(playerId, def.cost)) return;
+        const canPlace = this.canPlaceBuilding(command.buildingType, command.point.x, command.point.y);
+        if (!canPlace.ok) {
+          this.showPlayerMessage(playerId, `Cannot build here: ${canPlace.reason}`);
+          return;
+        }
+        if (!this.payCost(playerId, def.cost)) {
+          this.showPlayerMessage(playerId, "Not enough resources.");
+          return;
+        }
         const building = this.spawnBuilding(playerId, command.buildingType, command.point.x, command.point.y, false);
         command.workerIds.forEach((workerId, index) => {
           const worker = this.state.units.find((entry) => entry.id === workerId && entry.ownerId === playerId);
@@ -767,7 +775,11 @@ export class GameScene extends Phaser.Scene {
       }
       if (command.kind === "train") {
         const building = this.state.buildings.find((entry) => entry.id === command.buildingId && entry.ownerId === playerId);
-        if (building) this.queueTraining(building, command.unitType);
+        if (!building) {
+          this.showPlayerMessage(playerId, "Select your production building first.");
+          return;
+        }
+        this.queueTraining(building, command.unitType, { silent: playerId !== this.localPlayerId });
       }
     });
   }
@@ -1047,7 +1059,7 @@ export class GameScene extends Phaser.Scene {
 
       const desiredWorkers = elapsed < 120000 ? 6 : 8;
       if (townhall.completed && workers.length < desiredWorkers) {
-        this.queueTraining(townhall, "worker");
+        this.queueTraining(townhall, "worker", { silent: true });
       }
 
       if (!farm && workers[0] && elapsed > 22000 && this.payCost(player.playerId, BUILDING_DEFS.farm.cost)) {
@@ -1064,7 +1076,7 @@ export class GameScene extends Phaser.Scene {
         const meleeCount = combatUnits.filter((entry) => entry.type === "swordsman").length;
         const desiredArmy = elapsed < 150000 ? 8 : 14;
         if (combatUnits.length < desiredArmy) {
-          this.queueTraining(barracks, meleeCount <= combatUnits.length * 0.55 ? "swordsman" : "archer");
+          this.queueTraining(barracks, meleeCount <= combatUnits.length * 0.55 ? "swordsman" : "archer", { silent: true });
         }
       }
 
@@ -1139,12 +1151,20 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     if (def.type === "build") {
+      if (!this.state.selected.some((entry) => entry.kind === "unit" && entry.type === "worker")) {
+        this.showMessage("Select at least one Worker to build.");
+        return;
+      }
       this.enterBuildMode(def.value);
       return;
     }
     if (def.type === "train") {
       const building = this.getSingleSelectedBuilding();
-      if (building) this.issueCommands([{ kind: "train", buildingId: building.id, unitType: def.value }]);
+      if (!building) {
+        this.showMessage("Select Town Hall or Barracks first.");
+        return;
+      }
+      this.issueCommands([{ kind: "train", buildingId: building.id, unitType: def.value }]);
     }
   }
 
@@ -1166,7 +1186,10 @@ export class GameScene extends Phaser.Scene {
   tryPlaceBuilding(worldPoint) {
     if (!this.state.buildMode) return;
     const workers = this.state.selected.filter((entry) => entry.kind === "unit" && entry.type === "worker").map((entry) => entry.id);
-    if (workers.length === 0) return;
+    if (workers.length === 0) {
+      this.showMessage("Select Workers to place a building.");
+      return;
+    }
     this.issueCommands([{ kind: "place_building", buildingType: this.state.buildMode, workerIds: workers, point: worldPoint }]);
     this.cancelBuildMode();
   }
@@ -1180,14 +1203,29 @@ export class GameScene extends Phaser.Scene {
     return { ok: true };
   }
 
-  queueTraining(building, type) {
+  queueTraining(building, type, options = {}) {
+    const { silent = false } = options;
     const owner = this.state.players[building.ownerId];
     const def = UNIT_DEFS[type];
-    if (!building.completed || !building.def.canTrain?.includes(type)) return false;
-    if (owner.resources.supplyUsed + def.cost.supply > owner.resources.supplyCap) return false;
-    if (!this.payCost(building.ownerId, def.cost)) return false;
+    if (!building.completed) {
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Building is still under construction.");
+      return false;
+    }
+    if (!building.def.canTrain?.includes(type)) {
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("This building cannot train that unit.");
+      return false;
+    }
+    if (owner.resources.supplyUsed + def.cost.supply > owner.resources.supplyCap) {
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Need more supply. Build Farms.");
+      return false;
+    }
+    if (!this.payCost(building.ownerId, def.cost)) {
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Not enough resources.");
+      return false;
+    }
     building.queue.push({ type, remaining: def.trainTime });
     this.updateSupply(building.ownerId);
+    if (!silent && building.ownerId === this.localPlayerId) this.showMessage(`${def.label} queued.`);
     return true;
   }
 
@@ -1347,6 +1385,12 @@ export class GameScene extends Phaser.Scene {
   showMessage(message) {
     this.state.message = message;
     this.state.messageUntil = this.time.now + 2400;
+  }
+
+  showPlayerMessage(playerId, message) {
+    if (playerId === this.localPlayerId) {
+      this.showMessage(message);
+    }
   }
 
   updateUI(now) {
