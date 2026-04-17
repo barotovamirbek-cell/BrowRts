@@ -356,10 +356,13 @@ export class GameScene extends Phaser.Scene {
     defs.forEach((def, index) => {
       const x = 390 + (index % 4) * 148;
       const y = this.scale.height - 136 + Math.floor(index / 4) * 58;
-      const bg = this.add.rectangle(x, y, 132, 42, 0x2a241e, 0.95).setStrokeStyle(2, 0x7d6f5c, 0.9);
-      const text = this.add.text(x, y, def.label, { fontSize: "16px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
-      const container = this.add.container(0, 0, [bg, text]).setVisible(false).setScrollFactor(0);
-      bg.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.handleCommandButton(def));
+      const bg = this.add.rectangle(0, 0, 132, 42, 0x2a241e, 0.95).setStrokeStyle(2, 0x7d6f5c, 0.9);
+      const text = this.add.text(0, 0, def.label, { fontSize: "16px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
+      const container = this.add.container(x, y, [bg, text]).setVisible(false).setScrollFactor(0).setDepth(2000);
+      container.setSize(132, 42);
+      container
+        .setInteractive(new Phaser.Geom.Rectangle(-66, -21, 132, 42), Phaser.Geom.Rectangle.Contains)
+        .on("pointerdown", () => this.handleCommandButton(def));
       this.ui.buttons.push({ ...def, container, bg, text });
     });
   }
