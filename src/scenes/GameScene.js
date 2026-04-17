@@ -366,8 +366,7 @@ export class GameScene extends Phaser.Scene {
       const keycap = this.add.text(-57, -18, keybind.label, { fontSize: "11px", color: "#8f887b" }).setOrigin(0, 0);
       const title = this.add.text(0, -7, "", { fontSize: "15px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
       const sub = this.add.text(0, 11, "", { fontSize: "11px", color: "#bdb5a4", align: "center" }).setOrigin(0.5);
-      const hit = this.add.zone(0, 0, 132, 46).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
-      hit.setRectangleDropZone(132, 46);
+      const hit = this.add.rectangle(0, 0, 136, 50, 0x000000, 0.001).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
       hit.setInteractive({ useHandCursor: true });
       const container = this.add.container(0, 0, [bg, keycap, title, sub]).setScrollFactor(0).setDepth(2000);
       container.setSize(132, 46);
@@ -531,7 +530,25 @@ export class GameScene extends Phaser.Scene {
       KeyD: 5,
       KeyZ: 6,
       KeyX: 7,
-      KeyC: 8
+      KeyC: 8,
+      Digit1: 0,
+      Digit2: 1,
+      Digit3: 2,
+      Digit4: 3,
+      Digit5: 4,
+      Digit6: 5,
+      Digit7: 6,
+      Digit8: 7,
+      Digit9: 8,
+      Numpad1: 0,
+      Numpad2: 1,
+      Numpad3: 2,
+      Numpad4: 3,
+      Numpad5: 4,
+      Numpad6: 5,
+      Numpad7: 6,
+      Numpad8: 7,
+      Numpad9: 8
     };
     this.input.keyboard.on("keydown", (event) => {
       const slot = this.commandKeyCodeToSlot[event.code];
