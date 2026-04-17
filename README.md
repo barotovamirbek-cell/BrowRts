@@ -81,6 +81,7 @@ On public deployments you can set server URL directly in menu:
 - field: `Server WS URL`
 - button: `Apply Server URL`
 - requirement on `https` site: use `wss://...` (not `ws://...`)
+- example: `wss://your-rts-server.onrender.com`
 
 ## Controls
 
@@ -113,6 +114,15 @@ Cheap/free options for relay host:
 - Fly.io
 
 After deploying, paste your `wss://...` endpoint into `Server WS URL` in menu.
+
+## Black Screen / 404 Fix
+
+If browser console shows `main.js 404` on GitHub Pages:
+
+1. Open `Settings -> Pages`.
+2. Source must be `GitHub Actions` (not raw branch static publish).
+3. Use workflow `.github/workflows/deploy-pages.yml` (it builds Vite and deploys `dist`).
+4. Push latest commit and wait for successful `Deploy GitHub Pages` run.
 
 ## PlayFab
 

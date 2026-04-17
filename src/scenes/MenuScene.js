@@ -4,6 +4,7 @@ import { NetClient } from "../network/Client.js";
 import { loginWithCustomId, updateUserTitleDisplayName } from "../network/PlayFabClient.js";
 
 const WS_OVERRIDE_KEY = "ironfront.multiplayer.ws";
+const ENV = import.meta?.env ?? {};
 
 function isLoopbackUrl(url) {
   try {
@@ -321,7 +322,7 @@ export class MenuScene extends Phaser.Scene {
       localStorage.setItem(WS_OVERRIDE_KEY, query);
     }
     const stored = localStorage.getItem(WS_OVERRIDE_KEY)?.trim() ?? "";
-    const configured = (import.meta.env.VITE_MULTIPLAYER_WS_URL ?? "").trim();
+    const configured = (ENV.VITE_MULTIPLAYER_WS_URL ?? "").trim();
     const fallbackLocal = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:2567`;
     const candidate = query || stored || configured || (this.isPublicSite ? "" : fallbackLocal);
     if (this.isPublicSite && candidate && isLoopbackUrl(candidate)) {

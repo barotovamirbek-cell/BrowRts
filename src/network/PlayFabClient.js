@@ -1,4 +1,5 @@
-const TITLE_ID = import.meta.env.VITE_PLAYFAB_TITLE_ID ?? "";
+const ENV = import.meta?.env ?? {};
+const TITLE_ID = ENV.VITE_PLAYFAB_TITLE_ID ?? "";
 
 function getStoredCustomId() {
   const key = "ironfront.playfab.customId";
