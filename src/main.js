@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { BootScene } from "./scenes/BootScene.js";
 import { GameScene } from "./scenes/GameScene.js";
+import { MenuScene } from "./scenes/MenuScene.js";
 
 const config = {
   type: Phaser.AUTO,
@@ -8,7 +9,7 @@ const config = {
   backgroundColor: "#120f0b",
   width: window.innerWidth,
   height: window.innerHeight,
-  scene: [BootScene, GameScene],
+  scene: [BootScene, MenuScene, GameScene],
   render: {
     pixelArt: false,
     antialias: true

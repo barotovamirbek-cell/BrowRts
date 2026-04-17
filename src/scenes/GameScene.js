@@ -1,281 +1,255 @@
 import Phaser from "phaser";
 import { BUILD_OPTIONS, BUILDING_DEFS, MAP_HEIGHT, MAP_WIDTH, RESOURCE_TYPES, UNIT_DEFS } from "../game/defs.js";
+import { FACTION_DEFS, FACTION_ORDER } from "../game/factions.js";
 import { clamp, distance, distanceSq, formatCost, makeSelectionRect, pointInRect } from "../game/utils.js";
 
-const PLAYER = "player";
-const ENEMY = "enemy";
+const SPAWNS = [
+  { x: 340, y: 1560 },
+  { x: 2820, y: 620 },
+  { x: 420, y: 520 },
+  { x: 2820, y: 1600 }
+];
 
 export class GameScene extends Phaser.Scene {
   constructor() {
     super("game");
   }
 
+  init(data) {
+    this.mode = data.mode ?? "singleplayer";
+    this.netClient = data.netClient ?? null;
+    this.hostId = data.hostId ?? data.localPlayerId;
+    this.localPlayerId = data.localPlayerId;
+    this.isHost = this.mode === "singleplayer" || this.localPlayerId === this.hostId;
+    this.roster = this.normalizeRoster(data.roster ?? [], data.selectedFaction ?? "kingdom");
+  }
+
+  normalizeRoster(roster, selectedFaction) {
+    const entries = roster.map((entry, index) => ({
+      playerId: entry.playerId,
+      faction: entry.faction,
+      slot: entry.slot ?? index,
+      isHuman: entry.isHuman ?? true,
+      isHost: entry.isHost ?? false,
+      name: entry.name ?? entry.playerId
+    }));
+
+    const usedFactions = new Set(entries.map((entry) => entry.faction));
+    let aiIndex = 1;
+    for (const faction of FACTION_ORDER) {
+      if (entries.length >= 4) {
+        break;
+      }
+      if (usedFactions.has(faction)) {
+        continue;
+      }
+      entries.push({
+        playerId: `ai-${aiIndex++}`,
+        faction,
+        slot: entries.length,
+        isHuman: false,
+        isHost: false,
+        name: `${FACTION_DEFS[faction].name} AI`
+      });
+    }
+
+    if (!entries.some((entry) => entry.playerId === this.localPlayerId)) {
+      entries[0].playerId = this.localPlayerId;
+      entries[0].faction = selectedFaction;
+      entries[0].isHuman = true;
+    }
+
+    return entries.slice(0, 4);
+  }
+
   create() {
     this.state = {
-      resources: {
-        [PLAYER]: { gold: 320, wood: 260, supplyUsed: 0, supplyCap: 0 },
-        [ENEMY]: { gold: 240, wood: 220, supplyUsed: 0, supplyCap: 0 }
-      },
+      players: {},
       units: [],
       buildings: [],
       resourcesNodes: [],
-      projectiles: [],
       selected: [],
+      nextId: 1,
       buildMode: null,
       placingGhost: null,
-      nextId: 1,
+      result: null,
       message: "",
       messageUntil: 0,
-      result: null,
-      ai: {
-        nextDecisionAt: 0,
-        nextAttackAt: 0
-      }
+      ai: {},
+      snapshotSeen: false
     };
+
+    this.roster.forEach((entry) => {
+      this.state.players[entry.playerId] = {
+        ...entry,
+        factionDef: FACTION_DEFS[entry.faction],
+        resources: { gold: 320, wood: 260, supplyUsed: 0, supplyCap: 0 }
+      };
+      this.state.ai[entry.playerId] = { nextDecisionAt: 0, nextAttackAt: 0 };
+    });
 
     this.input.mouse.disableContextMenu();
     this.createMap();
-    this.createWorldState();
     this.createUI();
     this.setupInput();
     this.bindResize();
-    this.showMessage("Harvest, build and crush the enemy stronghold.");
+    this.setupNetworking();
+
+    if (this.isHost) {
+      this.createWorldState();
+      this.showMessage("Expand, train and break the rival factions.");
+    } else {
+      this.showMessage("Waiting for host snapshots...");
+    }
+  }
+
+  setupNetworking() {
+    if (!this.netClient) {
+      return;
+    }
+
+    this.netClient.on("input", (message) => {
+      if (!this.isHost) {
+        return;
+      }
+      this.applyRemoteCommands(message.fromPlayerId, message.commands ?? []);
+    });
+
+    this.netClient.on("state", (message) => {
+      if (this.isHost) {
+        return;
+      }
+      this.applySnapshot(message);
+    });
   }
 
   createMap() {
     this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
-    this.physics.world.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
 
     const bg = this.add.graphics();
-    bg.fillGradientStyle(0x1f3b23, 0x294f2f, 0x182b18, 0x233b23, 1);
+    bg.fillGradientStyle(0x1d2d20, 0x233d2a, 0x211614, 0x161110, 1);
     bg.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
 
-    for (let i = 0; i < 240; i += 1) {
-      const x = Phaser.Math.Between(0, MAP_WIDTH);
-      const y = Phaser.Math.Between(0, MAP_HEIGHT);
-      const radius = Phaser.Math.Between(18, 52);
+    for (let i = 0; i < 280; i += 1) {
       const color = Phaser.Display.Color.GetColor(
-        Phaser.Math.Between(28, 42),
-        Phaser.Math.Between(70, 95),
-        Phaser.Math.Between(26, 42)
+        Phaser.Math.Between(26, 64),
+        Phaser.Math.Between(40, 94),
+        Phaser.Math.Between(22, 58)
       );
-      bg.fillStyle(color, 0.18);
-      bg.fillCircle(x, y, radius);
+      bg.fillStyle(color, 0.16);
+      bg.fillCircle(
+        Phaser.Math.Between(0, MAP_WIDTH),
+        Phaser.Math.Between(0, MAP_HEIGHT),
+        Phaser.Math.Between(18, 58)
+      );
     }
 
     const river = this.add.graphics();
-    river.fillStyle(0x244d63, 0.42);
+    river.fillStyle(0x2b5261, 0.4);
     river.fillPoints(
       [
-        new Phaser.Geom.Point(420, 0),
-        new Phaser.Geom.Point(560, 120),
-        new Phaser.Geom.Point(700, 360),
-        new Phaser.Geom.Point(740, 640),
-        new Phaser.Geom.Point(720, 980),
-        new Phaser.Geom.Point(760, 1320),
-        new Phaser.Geom.Point(860, 1740),
-        new Phaser.Geom.Point(980, 2200),
-        new Phaser.Geom.Point(1230, 2200),
-        new Phaser.Geom.Point(1120, 1780),
-        new Phaser.Geom.Point(1010, 1360),
-        new Phaser.Geom.Point(970, 920),
-        new Phaser.Geom.Point(1020, 560),
-        new Phaser.Geom.Point(940, 250),
-        new Phaser.Geom.Point(760, 0)
+        new Phaser.Geom.Point(460, 0),
+        new Phaser.Geom.Point(620, 160),
+        new Phaser.Geom.Point(760, 380),
+        new Phaser.Geom.Point(780, 710),
+        new Phaser.Geom.Point(740, 980),
+        new Phaser.Geom.Point(800, 1320),
+        new Phaser.Geom.Point(900, 1740),
+        new Phaser.Geom.Point(1010, 2200),
+        new Phaser.Geom.Point(1290, 2200),
+        new Phaser.Geom.Point(1180, 1750),
+        new Phaser.Geom.Point(1070, 1320),
+        new Phaser.Geom.Point(1000, 940),
+        new Phaser.Geom.Point(1060, 600),
+        new Phaser.Geom.Point(980, 280),
+        new Phaser.Geom.Point(810, 0)
       ],
       true
     );
 
-    this.worldLayer = this.add.container();
     this.resourceLayer = this.add.container();
     this.buildingLayer = this.add.container();
     this.unitLayer = this.add.container();
     this.fxLayer = this.add.container();
 
-    this.selectionGraphics = this.add.graphics();
-    this.selectionGraphics.setScrollFactor(0);
+    this.selectionGraphics = this.add.graphics().setScrollFactor(0);
     this.commandMarker = this.add.graphics();
   }
 
   createWorldState() {
-    this.spawnStartingBase(PLAYER, 320, 1460);
-    this.spawnStartingBase(ENEMY, 2790, 680);
+    this.roster.forEach((entry, index) => {
+      const spawn = SPAWNS[index];
+      this.spawnStartingBase(entry.playerId, spawn.x, spawn.y, index);
+    });
 
-    const nodeData = [
-      ["gold", 600, 1340, 1500],
-      ["gold", 930, 1620, 1500],
-      ["gold", 2440, 840, 1500],
-      ["gold", 2670, 560, 1500],
-      ["wood", 520, 1180, 2200],
-      ["wood", 1030, 1460, 2200],
-      ["wood", 2280, 980, 2200],
-      ["wood", 2900, 820, 2200],
-      ["wood", 1580, 580, 2200],
-      ["gold", 1670, 1540, 1200]
-    ];
-
-    nodeData.forEach(([type, x, y, amount]) => this.spawnResource(type, x, y, amount));
+    [
+      ["gold", 750, 1260, 1800],
+      ["gold", 1120, 1480, 1800],
+      ["gold", 2440, 860, 1800],
+      ["gold", 2740, 620, 1800],
+      ["gold", 680, 560, 1800],
+      ["gold", 1490, 1080, 2200],
+      ["gold", 2430, 1530, 1800],
+      ["wood", 490, 1220, 2600],
+      ["wood", 1010, 1710, 2600],
+      ["wood", 2450, 1010, 2600],
+      ["wood", 2960, 840, 2600],
+      ["wood", 330, 310, 2600],
+      ["wood", 1660, 420, 2600],
+      ["wood", 1860, 1830, 2600]
+    ].forEach(([type, x, y, amount]) => this.spawnResource(type, x, y, amount));
   }
 
-  spawnStartingBase(owner, x, y) {
-    const sign = owner === PLAYER ? 1 : -1;
-    const townhall = this.spawnBuilding(owner, "townhall", x, y, true);
-    this.spawnUnit(owner, "worker", x + 96 * sign, y - 40);
-    this.spawnUnit(owner, "worker", x + 108 * sign, y + 18);
-    this.spawnUnit(owner, "worker", x + 58 * sign, y + 78);
-    this.spawnUnit(owner, "swordsman", x + 34 * sign, y - 116);
-    this.spawnUnit(owner, "archer", x - 14 * sign, y - 136);
-    if (owner === ENEMY) {
-      this.spawnBuilding(owner, "barracks", x - 120, y + 110, true);
-      this.spawnBuilding(owner, "farm", x - 156, y - 90, true);
-      townhall.rallyPoint = { x: x - 160, y: y + 20 };
-    }
-  }
-
-  spawnResource(type, x, y, amount) {
-    const texture = type === "gold" ? "gold-mine" : "tree";
-    const scale = type === "gold" ? 1.4 : 1.2;
-    const sprite = this.add.image(x, y, texture).setTint(RESOURCE_TYPES[type].color).setScale(scale);
-    this.resourceLayer.add(sprite);
-    const node = {
-      id: this.state.nextId++,
-      kind: "resource",
-      type,
-      x,
-      y,
-      amount,
-      sprite,
-      radius: type === "gold" ? 30 : 26
-    };
-    sprite.setData("entity", node);
-    this.state.resourcesNodes.push(node);
-    return node;
-  }
-
-  spawnUnit(owner, type, x, y) {
-    const def = UNIT_DEFS[type];
-    const baseTint = owner === PLAYER ? def.color : Phaser.Display.Color.IntegerToColor(def.color).darken(35).color;
-    const sprite = this.add.image(x, y, "unit-circle").setTint(baseTint);
-    const hpBg = this.add.rectangle(x, y - 18, 30, 4, 0x000000, 0.6);
-    const hpFill = this.add.rectangle(x - 15, y - 18, 30, 4, 0x6dd66d, 1).setOrigin(0, 0.5);
-    const selection = this.add.circle(x, y, def.radius + 6).setStrokeStyle(2, owner === PLAYER ? 0xf4f1d0 : 0xe66060, 0.95).setVisible(false);
-    this.unitLayer.add([selection, sprite, hpBg, hpFill]);
-
-    const unit = {
-      id: this.state.nextId++,
-      kind: "unit",
-      owner,
-      type,
-      x,
-      y,
-      hp: def.maxHp,
-      def,
-      sprite,
-      hpBg,
-      hpFill,
-      selection,
-      state: "idle",
-      moveTarget: null,
-      attackTarget: null,
-      resourceTarget: null,
-      buildTarget: null,
-      lastAttackAt: 0,
-      carry: null,
-      targetPos: null,
-      rallyFrom: null
-    };
-
-    sprite.setData("entity", unit);
-    this.state.units.push(unit);
-    this.updateSupply(owner);
-    return unit;
-  }
-
-  spawnBuilding(owner, type, x, y, completed) {
-    const def = BUILDING_DEFS[type];
-    const baseTint = owner === PLAYER ? def.color : Phaser.Display.Color.IntegerToColor(def.color).darken(35).color;
-    const sprite = this.add.image(x, y, "building-square").setDisplaySize(def.size, def.size).setTint(baseTint);
-    const hpBg = this.add.rectangle(x, y - def.size / 2 - 10, def.size, 6, 0x000000, 0.66);
-    const hpFill = this.add.rectangle(x - def.size / 2, y - def.size / 2 - 10, def.size, 6, 0x6dd66d, 1).setOrigin(0, 0.5);
-    const selection = this.add.rectangle(x, y, def.size + 10, def.size + 10).setStrokeStyle(2, owner === PLAYER ? 0xf4f1d0 : 0xe66060, 0.95).setVisible(false);
-    const label = this.add.text(x, y, def.label[0], {
-      fontFamily: "Georgia",
-      fontSize: `${Math.round(def.size * 0.38)}px`,
-      color: owner === PLAYER ? "#fff6cf" : "#ffe1dd"
-    }).setOrigin(0.5);
-    this.buildingLayer.add([selection, sprite, label, hpBg, hpFill]);
-
-    const building = {
-      id: this.state.nextId++,
-      kind: "building",
-      owner,
-      type,
-      x,
-      y,
-      hp: completed ? def.maxHp : Math.ceil(def.maxHp * 0.25),
-      def,
-      sprite,
-      label,
-      hpBg,
-      hpFill,
-      selection,
-      queue: [],
-      training: null,
-      buildProgress: completed ? def.buildTime : 0,
-      completed,
-      underConstruction: !completed,
-      workerIds: new Set(),
-      lastAttackAt: 0,
-      rallyPoint: { x: x + (owner === PLAYER ? 110 : -110), y: y + 30 }
-    };
-
-    if (!completed) {
-      sprite.setAlpha(0.58);
-      label.setAlpha(0.7);
-    }
-
-    sprite.setData("entity", building);
-    this.state.buildings.push(building);
-    this.updateSupply(owner);
-    return building;
+  spawnStartingBase(ownerId, x, y, slotIndex) {
+    const sign = slotIndex % 2 === 0 ? 1 : -1;
+    this.spawnBuilding(ownerId, "townhall", x, y, true);
+    this.spawnBuilding(ownerId, "farm", x + sign * 130, y - 100, true);
+    this.spawnBuilding(ownerId, "barracks", x + sign * 108, y + 108, true);
+    this.spawnUnit(ownerId, "worker", x + sign * 80, y - 42);
+    this.spawnUnit(ownerId, "worker", x + sign * 100, y + 18);
+    this.spawnUnit(ownerId, "worker", x + sign * 54, y + 74);
+    this.spawnUnit(ownerId, "swordsman", x + sign * 28, y - 110);
+    this.spawnUnit(ownerId, "archer", x - sign * 20, y - 138);
   }
 
   createUI() {
     const width = this.scale.width;
     const height = this.scale.height;
+    const faction = this.state.players[this.localPlayerId]?.factionDef ?? FACTION_DEFS.kingdom;
 
     this.ui = {
-      topBar: this.add.rectangle(0, 0, width, 54, 0x14100d, 0.92).setOrigin(0).setScrollFactor(0),
-      bottomBar: this.add.rectangle(0, height - 144, width, 144, 0x14100d, 0.94).setOrigin(0).setScrollFactor(0),
-      title: this.add.text(16, 12, "Ironfront", { fontSize: "24px", color: "#f1ddb1", fontFamily: "Georgia" }).setScrollFactor(0),
-      stats: this.add.text(190, 14, "", { fontSize: "18px", color: "#f4f2e6" }).setScrollFactor(0),
-      status: this.add.text(width - 20, 15, "", { fontSize: "18px", color: "#f8c885" }).setOrigin(1, 0).setScrollFactor(0),
-      selection: this.add.text(20, height - 132, "", { fontSize: "20px", color: "#f4f2e6", wordWrap: { width: 310 } }).setScrollFactor(0),
-      details: this.add.text(20, height - 92, "", { fontSize: "15px", color: "#bfb8a9", wordWrap: { width: 360 } }).setScrollFactor(0),
-      hint: this.add.text(width - 20, height - 128, "LMB select  RMB command  Drag edges/WASD move camera  Wheel zoom", {
+      topBar: this.add.rectangle(0, 0, width, 54, 0x120f0d, 0.94).setOrigin(0).setScrollFactor(0),
+      bottomBar: this.add.rectangle(0, height - 160, width, 160, 0x120f0d, 0.96).setOrigin(0).setScrollFactor(0),
+      title: this.add.text(16, 12, "Ironfront", { fontFamily: "Georgia", fontSize: "26px", color: faction.ui }).setScrollFactor(0),
+      stats: this.add.text(186, 14, "", { fontSize: "18px", color: "#f4f2e8" }).setScrollFactor(0),
+      status: this.add.text(width - 18, 15, "", { fontSize: "18px", color: "#f0c97a" }).setOrigin(1, 0).setScrollFactor(0),
+      selection: this.add.text(20, height - 142, "", { fontSize: "20px", color: "#f4f2e8", wordWrap: { width: 320 } }).setScrollFactor(0),
+      details: this.add.text(20, height - 98, "", { fontSize: "15px", color: "#bdb5a4", wordWrap: { width: 360 } }).setScrollFactor(0),
+      roster: this.add.text(width - 20, 70, "", { fontSize: "15px", color: "#ddd3c8", align: "right" }).setOrigin(1, 0).setScrollFactor(0),
+      hint: this.add.text(width - 20, height - 136, "LMB select  RMB order  B build  X stop  H home", {
         fontSize: "15px",
-        color: "#bfb8a9",
+        color: "#bdb5a4",
         align: "right"
       }).setOrigin(1, 0).setScrollFactor(0),
-      buttons: [],
-      result: this.add.text(width / 2, 84, "", {
-        fontSize: "42px",
-        fontStyle: "bold",
-        color: "#fff2c7",
+      minimapFrame: this.add.rectangle(width - 208, height - 146, 188, 128, 0x1f1916, 0.92).setOrigin(0).setStrokeStyle(2, 0x79674f, 0.95).setScrollFactor(0),
+      result: this.add.text(width / 2, 80, "", {
         fontFamily: "Georgia",
+        fontSize: "42px",
+        color: "#fff0c8",
         stroke: "#000000",
         strokeThickness: 4
-      }).setOrigin(0.5, 0).setScrollFactor(0).setVisible(false)
+      }).setOrigin(0.5, 0).setVisible(false).setScrollFactor(0),
+      buttons: []
     };
 
+    this.minimap = this.add.graphics().setScrollFactor(0);
     this.buildCommandButtons();
   }
 
   buildCommandButtons() {
     this.ui.buttons.forEach((button) => button.container.destroy());
     this.ui.buttons = [];
-
-    const buttonDefs = [
+    const defs = [
       { key: "build-farm", label: "Farm", type: "build", value: "farm" },
       { key: "build-barracks", label: "Barracks", type: "build", value: "barracks" },
       { key: "build-tower", label: "Tower", type: "build", value: "tower" },
@@ -285,15 +259,14 @@ export class GameScene extends Phaser.Scene {
       { key: "cancel", label: "Cancel", type: "cancel", value: null }
     ];
 
-    buttonDefs.forEach((buttonDef, index) => {
+    defs.forEach((def, index) => {
       const x = 390 + (index % 4) * 148;
-      const y = this.scale.height - 122 + Math.floor(index / 4) * 58;
+      const y = this.scale.height - 136 + Math.floor(index / 4) * 58;
       const bg = this.add.rectangle(x, y, 132, 42, 0x2a241e, 0.95).setStrokeStyle(2, 0x7d6f5c, 0.9);
-      const text = this.add.text(x, y, buttonDef.label, { fontSize: "16px", color: "#f4f2e6" }).setOrigin(0.5);
-      const container = this.add.container(0, 0, [bg, text]).setScrollFactor(0).setVisible(false);
-      bg.setInteractive({ useHandCursor: true });
-      bg.on("pointerdown", () => this.handleCommandButton(buttonDef));
-      this.ui.buttons.push({ ...buttonDef, container, bg, text });
+      const text = this.add.text(x, y, def.label, { fontSize: "16px", color: "#f4f2e6", align: "center" }).setOrigin(0.5);
+      const container = this.add.container(0, 0, [bg, text]).setVisible(false).setScrollFactor(0);
+      bg.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.handleCommandButton(def));
+      this.ui.buttons.push({ ...def, container, bg, text });
     });
   }
 
@@ -302,12 +275,14 @@ export class GameScene extends Phaser.Scene {
       const width = gameSize.width;
       const height = gameSize.height;
       this.ui.topBar.setSize(width, 54);
-      this.ui.bottomBar.setPosition(0, height - 144).setSize(width, 144);
-      this.ui.status.setPosition(width - 20, 15);
-      this.ui.selection.setPosition(20, height - 132);
-      this.ui.details.setPosition(20, height - 92);
-      this.ui.hint.setPosition(width - 20, height - 128);
-      this.ui.result.setPosition(width / 2, 84);
+      this.ui.bottomBar.setPosition(0, height - 160).setSize(width, 160);
+      this.ui.status.setPosition(width - 18, 15);
+      this.ui.selection.setPosition(20, height - 142);
+      this.ui.details.setPosition(20, height - 98);
+      this.ui.roster.setPosition(width - 20, 70);
+      this.ui.hint.setPosition(width - 20, height - 136);
+      this.ui.minimapFrame.setPosition(width - 208, height - 146);
+      this.ui.result.setPosition(width / 2, 80);
       this.buildCommandButtons();
     });
   }
@@ -320,30 +295,18 @@ export class GameScene extends Phaser.Scene {
       down: Phaser.Input.Keyboard.KeyCodes.S,
       build: Phaser.Input.Keyboard.KeyCodes.B,
       stop: Phaser.Input.Keyboard.KeyCodes.X,
-      townhall: Phaser.Input.Keyboard.KeyCodes.H,
-      one: Phaser.Input.Keyboard.KeyCodes.ONE,
-      two: Phaser.Input.Keyboard.KeyCodes.TWO,
-      three: Phaser.Input.Keyboard.KeyCodes.THREE
+      home: Phaser.Input.Keyboard.KeyCodes.H
     });
 
-    this.dragSelect = {
-      active: false,
-      start: new Phaser.Math.Vector2(),
-      end: new Phaser.Math.Vector2()
-    };
+    this.dragSelect = { active: false, start: new Phaser.Math.Vector2(), end: new Phaser.Math.Vector2() };
 
     this.input.on("pointerdown", (pointer) => {
-      if (this.state.result && pointer.rightButtonDown()) {
-        return;
-      }
-
       if (pointer.leftButtonDown()) {
         const worldPoint = pointer.positionToCamera(this.cameras.main);
         if (this.state.buildMode) {
           this.tryPlaceBuilding(worldPoint);
           return;
         }
-
         this.dragSelect.active = true;
         this.dragSelect.start.set(worldPoint.x, worldPoint.y);
         this.dragSelect.end.set(worldPoint.x, worldPoint.y);
@@ -379,120 +342,291 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.input.on("wheel", (_pointer, _gos, _dx, dy) => {
-      const cam = this.cameras.main;
-      cam.zoom = clamp(cam.zoom - dy * 0.001, 0.7, 1.35);
+      this.cameras.main.zoom = clamp(this.cameras.main.zoom - dy * 0.001, 0.7, 1.35);
     });
+  }
+
+  spawnResource(type, x, y, amount) {
+    const texture = type === "gold" ? "gold-mine" : "tree";
+    const scale = type === "gold" ? 1.4 : 1.2;
+    const sprite = this.add.image(x, y, texture).setTint(RESOURCE_TYPES[type].color).setScale(scale);
+    this.resourceLayer.add(sprite);
+    const node = { id: this.state.nextId++, kind: "resource", type, x, y, amount, sprite, radius: type === "gold" ? 30 : 26 };
+    sprite.setData("entity", node);
+    this.state.resourcesNodes.push(node);
+    return node;
+  }
+
+  spawnUnit(ownerId, type, x, y, fixedId = null) {
+    const owner = this.state.players[ownerId];
+    const faction = owner.factionDef;
+    const def = UNIT_DEFS[type];
+    const tint = faction.unitTints[type];
+    const sprite = this.add.image(x, y, "unit-circle").setTint(tint);
+    const hpBg = this.add.rectangle(x, y - 18, 30, 4, 0x000000, 0.6);
+    const hpFill = this.add.rectangle(x - 15, y - 18, 30, 4, 0x6dd66d, 1).setOrigin(0, 0.5);
+    const selection = this.add.circle(x, y, def.radius + 6).setStrokeStyle(2, 0xf4f1d0, 0.95).setVisible(false);
+    this.unitLayer.add([selection, sprite, hpBg, hpFill]);
+
+    const entity = {
+      id: fixedId ?? this.state.nextId++,
+      kind: "unit",
+      ownerId,
+      type,
+      def,
+      x,
+      y,
+      hp: def.maxHp,
+      sprite,
+      hpBg,
+      hpFill,
+      selection,
+      state: "idle",
+      moveTarget: null,
+      attackTarget: null,
+      resourceTarget: null,
+      buildTarget: null,
+      lastAttackAt: 0,
+      carry: null,
+      faction
+    };
+
+    sprite.setData("entity", entity);
+    this.state.units.push(entity);
+    this.updateSupply(ownerId);
+    return entity;
+  }
+
+  spawnBuilding(ownerId, type, x, y, completed, fixedId = null) {
+    const owner = this.state.players[ownerId];
+    const faction = owner.factionDef;
+    const def = BUILDING_DEFS[type];
+    const sprite = this.add.image(x, y, "building-square").setDisplaySize(def.size, def.size).setTint(faction.color);
+    const hpBg = this.add.rectangle(x, y - def.size / 2 - 10, def.size, 6, 0x000000, 0.66);
+    const hpFill = this.add.rectangle(x - def.size / 2, y - def.size / 2 - 10, def.size, 6, 0x6dd66d, 1).setOrigin(0, 0.5);
+    const selection = this.add.rectangle(x, y, def.size + 10, def.size + 10).setStrokeStyle(2, 0xf4f1d0, 0.95).setVisible(false);
+    const label = this.add.text(x, y, def.label[0], {
+      fontFamily: "Georgia",
+      fontSize: `${Math.round(def.size * 0.38)}px`,
+      color: faction.ui
+    }).setOrigin(0.5);
+    this.buildingLayer.add([selection, sprite, label, hpBg, hpFill]);
+
+    const entity = {
+      id: fixedId ?? this.state.nextId++,
+      kind: "building",
+      ownerId,
+      type,
+      def,
+      x,
+      y,
+      hp: completed ? def.maxHp : Math.ceil(def.maxHp * 0.25),
+      sprite,
+      hpBg,
+      hpFill,
+      selection,
+      label,
+      queue: [],
+      buildProgress: completed ? def.buildTime : 0,
+      completed,
+      rallyPoint: { x: x + 100, y: y + 30 },
+      lastAttackAt: 0
+    };
+
+    if (!completed) {
+      sprite.setAlpha(0.58);
+      label.setAlpha(0.72);
+    }
+
+    sprite.setData("entity", entity);
+    this.state.buildings.push(entity);
+    this.updateSupply(ownerId);
+    return entity;
+  }
+
+  update(_time, delta) {
+    const now = this.time.now;
+    const dt = delta / 1000;
+    this.handleCamera(dt);
+    this.updateSelectionBox();
+    this.updateGhostPlacement();
+
+    if (this.isHost) {
+      this.updateUnits(dt, now);
+      this.updateBuildings(delta, now);
+      this.updateAI(now);
+      this.cleanupDestroyed();
+      if (this.mode === "multiplayer" && now % 150 < 20) {
+        this.broadcastSnapshot();
+      }
+      this.checkEndConditions();
+    }
+
+    this.updateUI(now);
+    this.drawMinimap();
+  }
+
+  handleCamera(dt) {
+    const cam = this.cameras.main;
+    const speed = 620 / cam.zoom;
+    const pointer = this.input.activePointer;
+    const edge = 24;
+    if (this.keys.left.isDown || pointer.x < edge) cam.scrollX -= speed * dt;
+    if (this.keys.right.isDown || pointer.x > this.scale.width - edge) cam.scrollX += speed * dt;
+    if (this.keys.up.isDown || pointer.y < edge) cam.scrollY -= speed * dt;
+    if (this.keys.down.isDown || pointer.y > this.scale.height - edge) cam.scrollY += speed * dt;
+    cam.scrollX = clamp(cam.scrollX, 0, MAP_WIDTH - cam.width / cam.zoom);
+    cam.scrollY = clamp(cam.scrollY, 0, MAP_HEIGHT - cam.height / cam.zoom);
+
+    if (Phaser.Input.Keyboard.JustDown(this.keys.build)) {
+      if (this.state.selected.some((entity) => entity.kind === "unit" && entity.type === "worker")) {
+        this.enterBuildMode("farm");
+      }
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.stop)) {
+      const unitIds = this.state.selected.filter((entity) => entity.kind === "unit").map((entity) => entity.id);
+      this.issueCommands([{ kind: "stop", unitIds }]);
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.home)) {
+      const townhall = this.state.buildings.find((entry) => entry.ownerId === this.localPlayerId && entry.type === "townhall");
+      if (townhall) {
+        cam.centerOn(townhall.x, townhall.y);
+      }
+    }
   }
 
   handleSingleSelection(worldPoint, additive) {
     const entity = this.getEntityAt(worldPoint);
-    if (!additive) {
-      this.clearSelection();
-    }
-    if (entity && entity.owner === PLAYER) {
-      this.addToSelection(entity);
-    }
+    if (!additive) this.clearSelection();
+    if (entity && entity.ownerId === this.localPlayerId) this.addToSelection(entity);
   }
 
   selectInRect(rect, additive) {
-    if (!additive) {
-      this.clearSelection();
-    }
-
-    this.state.units
-      .filter((unit) => unit.owner === PLAYER && pointInRect(unit, rect))
-      .forEach((unit) => this.addToSelection(unit));
-
+    if (!additive) this.clearSelection();
+    this.state.units.filter((entry) => entry.ownerId === this.localPlayerId && pointInRect(entry, rect)).forEach((entry) => this.addToSelection(entry));
     if (this.state.selected.length === 0) {
-      this.state.buildings
-        .filter((building) => building.owner === PLAYER && pointInRect(building, rect))
-        .forEach((building) => this.addToSelection(building));
+      this.state.buildings.filter((entry) => entry.ownerId === this.localPlayerId && pointInRect(entry, rect)).forEach((entry) => this.addToSelection(entry));
     }
-  }
-
-  getEntityAt(worldPoint) {
-    const candidates = [
-      ...this.state.units.filter((unit) => distanceSq(unit, worldPoint) <= (unit.def.radius + 4) ** 2),
-      ...this.state.buildings.filter((building) => {
-        const half = building.def.size / 2;
-        return (
-          worldPoint.x >= building.x - half &&
-          worldPoint.x <= building.x + half &&
-          worldPoint.y >= building.y - half &&
-          worldPoint.y <= building.y + half
-        );
-      }),
-      ...this.state.resourcesNodes.filter((node) => distanceSq(node, worldPoint) <= node.radius ** 2)
-    ];
-
-    candidates.sort((a, b) => {
-      if (a.kind !== b.kind) {
-        return a.kind === "unit" ? -1 : 1;
-      }
-      return 0;
-    });
-    return candidates[0] ?? null;
   }
 
   addToSelection(entity) {
-    if (entity.kind === "resource") {
-      return;
-    }
-    if (this.state.selected.includes(entity)) {
-      return;
-    }
+    if (entity.kind === "resource" || this.state.selected.includes(entity)) return;
     entity.selection.setVisible(true);
     this.state.selected.push(entity);
   }
 
   clearSelection() {
-    this.state.selected.forEach((entity) => entity.selection.setVisible(false));
+    this.state.selected.forEach((entry) => entry.selection.setVisible(false));
     this.state.selected = [];
   }
 
-  handleRightClick(worldPoint) {
-    if (this.state.selected.length === 0 || this.state.result) {
-      return;
-    }
+  getEntityAt(worldPoint) {
+    const hits = [
+      ...this.state.units.filter((entry) => distanceSq(entry, worldPoint) <= (entry.def.radius + 4) ** 2),
+      ...this.state.buildings.filter((entry) => {
+        const half = entry.def.size / 2;
+        return worldPoint.x >= entry.x - half && worldPoint.x <= entry.x + half && worldPoint.y >= entry.y - half && worldPoint.y <= entry.y + half;
+      }),
+      ...this.state.resourcesNodes.filter((entry) => distanceSq(entry, worldPoint) <= entry.radius ** 2)
+    ];
+    return hits[0] ?? null;
+  }
 
+  handleRightClick(worldPoint) {
+    if (this.state.selected.length === 0) return;
     if (this.state.buildMode) {
       this.cancelBuildMode();
       return;
     }
 
     const target = this.getEntityAt(worldPoint);
-    const selectedUnits = this.state.selected.filter((entity) => entity.kind === "unit");
+    const selectedUnits = this.state.selected.filter((entry) => entry.kind === "unit");
 
     if (selectedUnits.length === 0) {
-      const selectedBuilding = this.state.selected[0];
-      if (selectedBuilding?.kind === "building") {
-        selectedBuilding.rallyPoint = { x: worldPoint.x, y: worldPoint.y };
-        this.showCommandMarker(worldPoint.x, worldPoint.y, 0xf4f1d0);
+      const building = this.getSingleSelectedBuilding();
+      if (building) {
+        this.issueCommands([{ kind: "rally", buildingId: building.id, point: worldPoint }]);
       }
       return;
     }
 
     const formationColumns = Math.ceil(Math.sqrt(selectedUnits.length));
-    selectedUnits.forEach((unit, index) => {
+    const commands = selectedUnits.map((unit, index) => {
       const offsetX = (index % formationColumns) * 34;
       const offsetY = Math.floor(index / formationColumns) * 34;
-      const formationPoint = {
-        x: worldPoint.x + offsetX - (formationColumns * 17),
-        y: worldPoint.y + offsetY - 18
-      };
-
+      const point = { x: worldPoint.x + offsetX - formationColumns * 17, y: worldPoint.y + offsetY - 17 };
       if (target?.kind === "resource" && unit.type === "worker") {
-        this.commandGather(unit, target);
-      } else if (target && target.owner && target.owner !== unit.owner) {
-        this.commandAttack(unit, target);
-      } else if (target?.kind === "building" && target.owner === PLAYER && unit.type === "worker" && unit.carry) {
-        this.commandReturn(unit, target);
-      } else {
-        this.commandMove(unit, formationPoint);
+        return { kind: "unit_command", unitIds: [unit.id], action: "gather", targetId: target.id };
       }
+      if (target?.ownerId && target.ownerId !== unit.ownerId) {
+        return { kind: "unit_command", unitIds: [unit.id], action: "attack", targetId: target.id };
+      }
+      if (target?.kind === "building" && target.ownerId === unit.ownerId && unit.type === "worker" && unit.carry) {
+        return { kind: "unit_command", unitIds: [unit.id], action: "return", targetId: target.id };
+      }
+      return { kind: "unit_command", unitIds: [unit.id], action: "move", point };
     });
 
-    this.showCommandMarker(worldPoint.x, worldPoint.y, target?.owner && target.owner !== PLAYER ? 0xd95959 : 0xf4f1d0);
+    this.issueCommands(commands);
+    this.showCommandMarker(worldPoint.x, worldPoint.y, target?.ownerId && target.ownerId !== this.localPlayerId ? 0xd95959 : 0xf4f1d0);
+  }
+
+  issueCommands(commands) {
+    const filtered = commands.filter(Boolean);
+    if (filtered.length === 0) return;
+    if (this.isHost) {
+      this.applyRemoteCommands(this.localPlayerId, filtered);
+    } else {
+      this.netClient?.send("input", { commands: filtered });
+    }
+  }
+
+  applyRemoteCommands(playerId, commands) {
+    commands.forEach((command) => {
+      if (command.kind === "unit_command") {
+        command.unitIds.forEach((unitId) => {
+          const unit = this.state.units.find((entry) => entry.id === unitId && entry.ownerId === playerId);
+          if (!unit) return;
+          if (command.action === "move") this.commandMove(unit, command.point);
+          if (command.action === "attack") this.commandAttack(unit, this.getEntityById(command.targetId));
+          if (command.action === "gather") this.commandGather(unit, this.getEntityById(command.targetId));
+          if (command.action === "return") this.commandReturn(unit, this.getEntityById(command.targetId));
+        });
+      }
+      if (command.kind === "stop") {
+        command.unitIds.forEach((unitId) => {
+          const unit = this.state.units.find((entry) => entry.id === unitId && entry.ownerId === playerId);
+          if (!unit) return;
+          unit.state = "idle";
+          unit.moveTarget = null;
+          unit.attackTarget = null;
+          unit.resourceTarget = null;
+          unit.buildTarget = null;
+        });
+      }
+      if (command.kind === "rally") {
+        const building = this.state.buildings.find((entry) => entry.id === command.buildingId && entry.ownerId === playerId);
+        if (building) building.rallyPoint = command.point;
+      }
+      if (command.kind === "place_building") {
+        const def = BUILDING_DEFS[command.buildingType];
+        if (!def) return;
+        if (!this.canPlaceBuilding(command.buildingType, command.point.x, command.point.y).ok) return;
+        if (!this.payCost(playerId, def.cost)) return;
+        const building = this.spawnBuilding(playerId, command.buildingType, command.point.x, command.point.y, false);
+        command.workerIds.forEach((workerId, index) => {
+          const worker = this.state.units.find((entry) => entry.id === workerId && entry.ownerId === playerId);
+          if (!worker) return;
+          worker.buildTarget = building;
+          worker.state = "building";
+          worker.moveTarget = { x: building.x + ((index % 2) * 26) - 13, y: building.y + Math.floor(index / 2) * 26 - 13 };
+        });
+      }
+      if (command.kind === "train") {
+        const building = this.state.buildings.find((entry) => entry.id === command.buildingId && entry.ownerId === playerId);
+        if (building) this.queueTraining(building, command.unitType);
+      }
+    });
   }
 
   commandMove(unit, point) {
@@ -504,317 +638,40 @@ export class GameScene extends Phaser.Scene {
   }
 
   commandAttack(unit, target) {
+    if (!target) return;
     unit.state = "attacking";
     unit.attackTarget = target;
-    unit.moveTarget = null;
-    unit.resourceTarget = null;
   }
 
   commandGather(unit, resource) {
+    if (!resource) return;
     unit.state = "gathering";
     unit.resourceTarget = resource;
     unit.attackTarget = null;
-    unit.moveTarget = null;
   }
 
   commandReturn(unit, building) {
+    if (!building) return;
     unit.state = "returning";
-    unit.moveTarget = { x: building.x, y: building.y };
-    unit.attackTarget = null;
     unit.resourceTarget = building;
   }
 
-  showCommandMarker(x, y, color) {
-    this.commandMarker.clear();
-    this.commandMarker.lineStyle(2, color, 0.9);
-    this.commandMarker.strokeCircle(x, y, 18);
-    this.commandMarker.strokeCircle(x, y, 10);
-    this.time.delayedCall(260, () => this.commandMarker.clear());
-  }
-
-  handleCommandButton(buttonDef) {
-    if (this.state.result) {
-      return;
-    }
-
-    if (buttonDef.type === "cancel") {
-      if (this.state.buildMode) {
-        this.cancelBuildMode();
-        return;
-      }
-
-      const building = this.getSingleSelectedBuilding();
-      if (building?.queue.length) {
-        const queueItem = building.queue.pop();
-        const unitDef = UNIT_DEFS[queueItem.type];
-        this.state.resources[PLAYER].gold += unitDef.cost.gold;
-        this.state.resources[PLAYER].wood += unitDef.cost.wood;
-        this.updateSupply(PLAYER);
-      }
-      return;
-    }
-
-    if (buttonDef.type === "build") {
-      const workers = this.state.selected.filter((entity) => entity.kind === "unit" && entity.type === "worker");
-      if (workers.length === 0) {
-        return;
-      }
-      this.enterBuildMode(buttonDef.value);
-      return;
-    }
-
-    if (buttonDef.type === "train") {
-      const building = this.getSingleSelectedBuilding();
-      if (!building || !building.completed || !building.def.canTrain?.includes(buttonDef.value)) {
-        return;
-      }
-      this.queueTraining(building, buttonDef.value);
-    }
-  }
-
-  getSingleSelectedBuilding() {
-    return this.state.selected.length === 1 && this.state.selected[0].kind === "building" ? this.state.selected[0] : null;
-  }
-
-  enterBuildMode(type) {
-    this.cancelBuildMode();
-    const def = BUILDING_DEFS[type];
-    this.state.buildMode = type;
-    this.state.placingGhost = this.add
-      .rectangle(0, 0, def.size, def.size, 0xb0d5a0, 0.28)
-      .setStrokeStyle(2, 0xf4f1d0, 0.92);
-    this.state.placingGhost.setDepth(1000);
-    this.showMessage(`Place ${def.label}`);
-  }
-
-  cancelBuildMode() {
-    this.state.buildMode = null;
-    this.state.placingGhost?.destroy();
-    this.state.placingGhost = null;
-  }
-
-  tryPlaceBuilding(worldPoint) {
-    const type = this.state.buildMode;
-    const def = BUILDING_DEFS[type];
-    const workers = this.state.selected.filter((entity) => entity.kind === "unit" && entity.type === "worker");
-    if (workers.length === 0) {
-      this.cancelBuildMode();
-      return;
-    }
-
-    const canPlace = this.canPlaceBuilding(type, worldPoint.x, worldPoint.y);
-    if (!canPlace.ok) {
-      this.showMessage(canPlace.reason);
-      return;
-    }
-
-    if (!this.payCost(PLAYER, def.cost)) {
-      this.showMessage("Not enough resources.");
-      return;
-    }
-
-    const building = this.spawnBuilding(PLAYER, type, worldPoint.x, worldPoint.y, false);
-    workers.forEach((worker, index) => {
-      worker.buildTarget = building;
-      worker.state = "building";
-      worker.moveTarget = { x: building.x + ((index % 2) * 28) - 14, y: building.y + (Math.floor(index / 2) * 28) - 14 };
-      building.workerIds.add(worker.id);
-    });
-    this.cancelBuildMode();
-    this.showMessage(`${def.label} construction started.`);
-  }
-
-  canPlaceBuilding(type, x, y) {
-    const size = BUILDING_DEFS[type].size;
-    const padding = size / 2 + 20;
-    if (x < padding || y < padding || x > MAP_WIDTH - padding || y > MAP_HEIGHT - padding) {
-      return { ok: false, reason: "Too close to map edge." };
-    }
-
-    const overlapsBuilding = this.state.buildings.some((building) => distance(building, { x, y }) < (building.def.size + size) * 0.65);
-    if (overlapsBuilding) {
-      return { ok: false, reason: "Area is blocked." };
-    }
-
-    const overlapsResource = this.state.resourcesNodes.some((node) => distance(node, { x, y }) < node.radius + size * 0.7);
-    if (overlapsResource) {
-      return { ok: false, reason: "Too close to resource node." };
-    }
-
-    return { ok: true };
-  }
-
-  queueTraining(building, type) {
-    const def = UNIT_DEFS[type];
-    const ownerState = this.state.resources[building.owner];
-    if (ownerState.supplyUsed + def.cost.supply > ownerState.supplyCap) {
-      if (building.owner === PLAYER) {
-        this.showMessage("Need more supply.");
-      }
-      return false;
-    }
-    if (!this.payCost(building.owner, def.cost)) {
-      if (building.owner === PLAYER) {
-        this.showMessage("Not enough resources.");
-      }
-      return false;
-    }
-
-    building.queue.push({ type, remaining: def.trainTime });
-    this.updateSupply(building.owner);
-    if (building.owner === PLAYER) {
-      this.showMessage(`${def.label} queued.`);
-    }
-    return true;
-  }
-
-  payCost(owner, cost) {
-    const res = this.state.resources[owner];
-    if (!cost) {
-      return true;
-    }
-    if (res.gold < (cost.gold ?? 0) || res.wood < (cost.wood ?? 0)) {
-      return false;
-    }
-    res.gold -= cost.gold ?? 0;
-    res.wood -= cost.wood ?? 0;
-    return true;
-  }
-
-  refundSupply(entity) {
-    if (entity.kind === "unit") {
-      this.state.resources[entity.owner].supplyUsed -= entity.def.cost.supply;
-    }
-  }
-
-  update(_time, delta) {
-    const now = this.time.now;
-    const dt = delta / 1000;
-
-    this.handleCamera(dt);
-    this.updateSelectionBox();
-    this.updateGhostPlacement();
-    this.updateUnits(dt, now);
-    this.updateBuildings(delta, now);
-    this.updateProjectiles(dt);
-    this.updateAI(now);
-    this.cleanupDestroyed();
-    this.updateUI(now);
-    this.checkEndConditions();
-  }
-
-  handleCamera(dt) {
-    const cam = this.cameras.main;
-    const speed = 620 / cam.zoom;
-    const pointer = this.input.activePointer;
-    const edge = 24;
-
-    if (this.keys.left.isDown || pointer.x < edge) {
-      cam.scrollX -= speed * dt;
-    }
-    if (this.keys.right.isDown || pointer.x > this.scale.width - edge) {
-      cam.scrollX += speed * dt;
-    }
-    if (this.keys.up.isDown || pointer.y < edge) {
-      cam.scrollY -= speed * dt;
-    }
-    if (this.keys.down.isDown || pointer.y > this.scale.height - edge) {
-      cam.scrollY += speed * dt;
-    }
-
-    cam.scrollX = clamp(cam.scrollX, 0, MAP_WIDTH - cam.width / cam.zoom);
-    cam.scrollY = clamp(cam.scrollY, 0, MAP_HEIGHT - cam.height / cam.zoom);
-
-    if (Phaser.Input.Keyboard.JustDown(this.keys.stop)) {
-      this.state.selected.filter((entity) => entity.kind === "unit").forEach((unit) => {
-        unit.state = "idle";
-        unit.moveTarget = null;
-        unit.attackTarget = null;
-        unit.resourceTarget = null;
-        unit.buildTarget = null;
-      });
-    }
-
-    if (Phaser.Input.Keyboard.JustDown(this.keys.build)) {
-      if (this.state.selected.some((entity) => entity.kind === "unit" && entity.type === "worker")) {
-        this.enterBuildMode("farm");
-      }
-    }
-
-    if (Phaser.Input.Keyboard.JustDown(this.keys.townhall)) {
-      const townhall = this.state.buildings.find((building) => building.owner === PLAYER && building.type === "townhall");
-      if (townhall) {
-        cam.centerOn(townhall.x, townhall.y);
-        this.clearSelection();
-        this.addToSelection(townhall);
-      }
-    }
-
-    if (Phaser.Input.Keyboard.JustDown(this.keys.one)) {
-      this.selectOwnedUnitType("worker");
-    }
-    if (Phaser.Input.Keyboard.JustDown(this.keys.two)) {
-      this.selectOwnedUnitType("swordsman");
-    }
-    if (Phaser.Input.Keyboard.JustDown(this.keys.three)) {
-      this.selectOwnedUnitType("archer");
-    }
-  }
-
-  selectOwnedUnitType(type) {
-    this.clearSelection();
-    this.state.units
-      .filter((unit) => unit.owner === PLAYER && unit.type === type)
-      .slice(0, 12)
-      .forEach((unit) => this.addToSelection(unit));
-  }
-
-  updateSelectionBox() {
-    this.selectionGraphics.clear();
-    if (!this.dragSelect.active) {
-      return;
-    }
-    const cam = this.cameras.main;
-    const x = Math.min(this.dragSelect.start.x, this.dragSelect.end.x) - cam.scrollX;
-    const y = Math.min(this.dragSelect.start.y, this.dragSelect.end.y) - cam.scrollY;
-    const width = Math.abs(this.dragSelect.start.x - this.dragSelect.end.x);
-    const height = Math.abs(this.dragSelect.start.y - this.dragSelect.end.y);
-    this.selectionGraphics.lineStyle(1, 0xf4f1d0, 0.95);
-    this.selectionGraphics.fillStyle(0xf4f1d0, 0.14);
-    this.selectionGraphics.fillRect(x, y, width, height);
-    this.selectionGraphics.strokeRect(x, y, width, height);
-  }
-
-  updateGhostPlacement() {
-    if (!this.state.placingGhost || !this.state.buildMode) {
-      return;
-    }
-    const def = BUILDING_DEFS[this.state.buildMode];
-    const canPlace = this.canPlaceBuilding(this.state.buildMode, this.state.placingGhost.x, this.state.placingGhost.y);
-    this.state.placingGhost.setSize(def.size, def.size);
-    this.state.placingGhost.setFillStyle(canPlace.ok ? 0x9fcf8a : 0xc05a5a, 0.28);
-    this.state.placingGhost.setStrokeStyle(2, canPlace.ok ? 0xf4f1d0 : 0xffb4b4, 0.92);
-  }
-
   updateUnits(dt, now) {
-    for (const unit of this.state.units) {
-      if (unit.dead) {
-        continue;
-      }
-
-      if (unit.state === "building") {
-        this.updateWorkerBuild(unit, dt);
+    this.state.units.forEach((unit) => {
+      if (unit.dead) return;
+      if (unit.state === "moving" && unit.moveTarget) {
+        if (this.moveEntityTowards(unit, unit.moveTarget, this.getMoveSpeed(unit) * dt)) {
+          unit.state = "idle";
+          unit.moveTarget = null;
+        }
+      } else if (unit.state === "attacking") {
+        this.updateCombatantAttack(unit, dt, now);
       } else if (unit.state === "gathering") {
         this.updateWorkerGather(unit, dt);
       } else if (unit.state === "returning") {
         this.updateWorkerReturn(unit, dt);
-      } else if (unit.state === "attacking") {
-        this.updateCombatantAttack(unit, dt, now);
-      } else if (unit.state === "moving") {
-        if (unit.moveTarget && this.moveEntityTowards(unit, unit.moveTarget, unit.def.speed * dt)) {
-          unit.moveTarget = null;
-          unit.state = "idle";
-        }
+      } else if (unit.state === "building") {
+        this.updateWorkerBuild(unit, dt);
       } else {
         this.autoAcquireTarget(unit);
       }
@@ -823,108 +680,7 @@ export class GameScene extends Phaser.Scene {
       unit.selection.setPosition(unit.x, unit.y);
       unit.hpBg.setPosition(unit.x, unit.y - 18);
       unit.hpFill.setPosition(unit.x - 15, unit.y - 18).setDisplaySize(30 * (unit.hp / unit.def.maxHp), 4);
-    }
-  }
-
-  updateWorkerBuild(unit, dt) {
-    const building = unit.buildTarget;
-    if (!building || building.dead) {
-      unit.buildTarget = null;
-      unit.state = "idle";
-      return;
-    }
-
-    if (distance(unit, building) > building.def.size * 0.62) {
-      this.moveEntityTowards(unit, { x: unit.moveTarget.x, y: unit.moveTarget.y }, unit.def.speed * dt);
-      return;
-    }
-
-    if (building.completed) {
-      unit.buildTarget = null;
-      unit.state = "idle";
-      return;
-    }
-
-    building.buildProgress += dt * 1000 * 0.65;
-    building.hp = clamp(building.hp + dt * (building.def.maxHp / (building.def.buildTime / 1000)), 0, building.def.maxHp);
-    if (building.buildProgress >= building.def.buildTime) {
-      building.completed = true;
-      building.underConstruction = false;
-      building.sprite.setAlpha(1);
-      building.label.setAlpha(1);
-      building.hp = building.def.maxHp;
-      this.updateSupply(building.owner);
-      unit.buildTarget = null;
-      unit.state = "idle";
-      if (building.owner === PLAYER) {
-        this.showMessage(`${building.def.label} ready.`);
-      }
-    }
-  }
-
-  updateWorkerGather(unit, dt) {
-    const node = unit.resourceTarget;
-    if (!node || node.dead || node.amount <= 0) {
-      unit.resourceTarget = null;
-      unit.state = "idle";
-      return;
-    }
-
-    if (unit.carry && unit.carry.amount >= unit.def.carryLimit) {
-      const dropOff = this.findNearestDropOff(unit.owner, unit);
-      if (dropOff) {
-        this.commandReturn(unit, dropOff);
-      }
-      return;
-    }
-
-    if (distance(unit, node) > node.radius + 10) {
-      this.moveEntityTowards(unit, node, unit.def.speed * dt);
-      return;
-    }
-
-    unit.carry ??= { type: node.type, amount: 0 };
-    const gathered = Math.min(node.amount, unit.def.harvestRate * dt);
-    node.amount -= gathered;
-    unit.carry.amount += gathered;
-    unit.carry.type = node.type;
-    if (unit.carry.amount >= unit.def.carryLimit || node.amount <= 0) {
-      const dropOff = this.findNearestDropOff(unit.owner, unit);
-      if (dropOff) {
-        this.commandReturn(unit, dropOff);
-      } else {
-        unit.state = "idle";
-      }
-    }
-  }
-
-  updateWorkerReturn(unit, dt) {
-    const building = unit.resourceTarget;
-    if (!building || building.dead) {
-      unit.state = "idle";
-      unit.resourceTarget = null;
-      return;
-    }
-
-    if (!unit.carry) {
-      unit.state = "idle";
-      unit.resourceTarget = null;
-      return;
-    }
-
-    if (distance(unit, building) > building.def.size * 0.62) {
-      this.moveEntityTowards(unit, building, unit.def.speed * dt);
-      return;
-    }
-
-    this.state.resources[unit.owner][unit.carry.type] += unit.carry.amount;
-    const resourceNode = this.findClosestResource(unit, unit.carry.type);
-    unit.carry = null;
-    if (resourceNode) {
-      this.commandGather(unit, resourceNode);
-    } else {
-      unit.state = "idle";
-    }
+    });
   }
 
   updateCombatantAttack(attacker, dt, now) {
@@ -934,38 +690,175 @@ export class GameScene extends Phaser.Scene {
       attacker.state = "idle";
       return;
     }
-
     const range = attacker.def.range + (target.kind === "building" ? target.def.size / 2 : 0);
-    const currentDistance = distance(attacker, target);
-    if (currentDistance > range) {
-      this.moveEntityTowards(attacker, target, attacker.def.speed * dt);
+    if (distance(attacker, target) > range) {
+      this.moveEntityTowards(attacker, target, this.getMoveSpeed(attacker) * dt);
       return;
     }
-
-    if (now - attacker.lastAttackAt < attacker.def.attackCooldown) {
-      return;
-    }
-
+    if (now - attacker.lastAttackAt < attacker.def.attackCooldown) return;
     attacker.lastAttackAt = now;
-    if (attacker.type === "archer") {
-      this.spawnProjectile(attacker, target);
-    } else {
-      this.applyDamage(target, attacker.def.damage, attacker);
+    this.applyDamage(target, this.getDamage(attacker), attacker);
+  }
+
+  updateWorkerGather(unit, dt) {
+    const node = unit.resourceTarget;
+    if (!node || node.dead || node.amount <= 0) {
+      unit.state = "idle";
+      unit.resourceTarget = null;
+      return;
+    }
+    if (unit.carry && unit.carry.amount >= unit.def.carryLimit) {
+      const drop = this.findNearestDropOff(unit.ownerId, unit);
+      if (drop) this.commandReturn(unit, drop);
+      return;
+    }
+    if (distance(unit, node) > node.radius + 10) {
+      this.moveEntityTowards(unit, node, this.getMoveSpeed(unit) * dt);
+      return;
+    }
+    unit.carry ??= { type: node.type, amount: 0 };
+    const gathered = Math.min(node.amount, unit.def.harvestRate * this.getGatherRate(unit) * dt);
+    node.amount -= gathered;
+    unit.carry.amount += gathered;
+    unit.carry.type = node.type;
+    if (unit.carry.amount >= unit.def.carryLimit || node.amount <= 0) {
+      const drop = this.findNearestDropOff(unit.ownerId, unit);
+      if (drop) this.commandReturn(unit, drop);
     }
   }
 
-  autoAcquireTarget(unit) {
-    const enemies = [...this.state.units, ...this.state.buildings]
-      .filter((entity) => entity.owner !== unit.owner && !entity.dead)
-      .sort((a, b) => distanceSq(unit, a) - distanceSq(unit, b));
-    const nearest = enemies[0];
-    if (!nearest) {
+  updateWorkerReturn(unit, dt) {
+    const building = unit.resourceTarget;
+    if (!building || building.dead || !unit.carry) {
+      unit.state = "idle";
+      unit.resourceTarget = null;
       return;
     }
-    const leash = unit.type === "worker" ? 90 : 180;
-    if (distance(unit, nearest) <= leash) {
-      unit.state = "attacking";
-      unit.attackTarget = nearest;
+    if (distance(unit, building) > building.def.size * 0.62) {
+      this.moveEntityTowards(unit, building, this.getMoveSpeed(unit) * dt);
+      return;
+    }
+    this.state.players[unit.ownerId].resources[unit.carry.type] += unit.carry.amount;
+    const nextNode = this.findClosestResource(unit, unit.carry.type);
+    unit.carry = null;
+    if (nextNode) {
+      this.commandGather(unit, nextNode);
+    } else {
+      unit.state = "idle";
+    }
+  }
+
+  updateWorkerBuild(unit, dt) {
+    const building = unit.buildTarget;
+    if (!building || building.dead) {
+      unit.state = "idle";
+      unit.buildTarget = null;
+      return;
+    }
+    if (distance(unit, building) > building.def.size * 0.62) {
+      this.moveEntityTowards(unit, building, this.getMoveSpeed(unit) * dt);
+      return;
+    }
+    if (building.completed) {
+      unit.state = "idle";
+      unit.buildTarget = null;
+      return;
+    }
+    building.buildProgress += dt * 1000 * unit.faction.modifiers.buildSpeed;
+    building.hp = clamp(building.hp + dt * (building.def.maxHp / (building.def.buildTime / 1000)), 0, building.def.maxHp);
+    if (building.buildProgress >= building.def.buildTime) {
+      building.completed = true;
+      building.sprite.setAlpha(1);
+      building.label.setAlpha(1);
+      building.hp = building.def.maxHp;
+      unit.state = "idle";
+      unit.buildTarget = null;
+      this.updateSupply(building.ownerId);
+    }
+  }
+
+  updateBuildings(delta, now) {
+    this.state.buildings.forEach((building) => {
+      if (building.dead) return;
+      if (building.completed && building.queue.length) {
+        building.queue[0].remaining -= delta;
+        if (building.queue[0].remaining <= 0) {
+          const queueItem = building.queue.shift();
+          const unit = this.spawnUnit(building.ownerId, queueItem.type, building.x + 48, building.y + 18);
+          this.commandMove(unit, building.rallyPoint);
+          this.updateSupply(building.ownerId);
+        }
+      }
+      if (building.completed && building.type === "tower") {
+        const target = [...this.state.units, ...this.state.buildings]
+          .filter((entry) => entry.ownerId !== building.ownerId && !entry.dead)
+          .sort((a, b) => distanceSq(building, a) - distanceSq(building, b))[0];
+        if (target && distance(building, target) <= building.def.range && now - building.lastAttackAt >= building.def.attackCooldown) {
+          building.lastAttackAt = now;
+          this.applyDamage(target, building.def.damage, building);
+        }
+      }
+      building.sprite.setPosition(building.x, building.y);
+      building.label.setPosition(building.x, building.y);
+      building.selection.setPosition(building.x, building.y);
+      building.hpBg.setPosition(building.x, building.y - building.def.size / 2 - 10);
+      building.hpFill.setPosition(building.x - building.def.size / 2, building.y - building.def.size / 2 - 10);
+      building.hpFill.setDisplaySize(building.def.size * (building.hp / building.def.maxHp), 6);
+    });
+  }
+
+  updateAI(now) {
+    Object.values(this.state.players).forEach((player) => {
+      if (player.isHuman) return;
+      const ai = this.state.ai[player.playerId];
+      if (now < ai.nextDecisionAt) return;
+      ai.nextDecisionAt = now + 2500;
+
+      const townhall = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "townhall" && !entry.dead);
+      const barracks = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "barracks" && !entry.dead);
+      const farm = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "farm" && !entry.dead);
+      const workers = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type === "worker" && !entry.dead);
+      workers.forEach((worker) => {
+        if (worker.state === "idle") {
+          const resource = this.findClosestResource(worker, player.resources.gold < player.resources.wood ? "gold" : "wood");
+          if (resource) this.commandGather(worker, resource);
+        }
+      });
+
+      if (townhall?.completed && workers.length < 4) this.queueTraining(townhall, "worker");
+      if (!farm && workers[0] && this.payCost(player.playerId, BUILDING_DEFS.farm.cost)) {
+        const building = this.spawnBuilding(player.playerId, "farm", townhall.x + 120, townhall.y - 90, false);
+        workers[0].buildTarget = building;
+        workers[0].state = "building";
+      } else if (!barracks && workers[1] && this.payCost(player.playerId, BUILDING_DEFS.barracks.cost)) {
+        const building = this.spawnBuilding(player.playerId, "barracks", townhall.x + 110, townhall.y + 110, false);
+        workers[1].buildTarget = building;
+        workers[1].state = "building";
+      }
+
+      if (barracks?.completed) {
+        const meleeCount = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type === "swordsman" && !entry.dead).length;
+        this.queueTraining(barracks, meleeCount < 3 ? "swordsman" : "archer");
+      }
+
+      if (now >= ai.nextAttackAt) {
+        ai.nextAttackAt = now + Phaser.Math.Between(12000, 17000);
+        const attackers = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type !== "worker" && !entry.dead);
+        const target = [...this.state.units, ...this.state.buildings]
+          .filter((entry) => entry.ownerId !== player.playerId && !entry.dead)
+          .sort((a, b) => distanceSq(townhall ?? { x: 0, y: 0 }, a) - distanceSq(townhall ?? { x: 0, y: 0 }, b))[0];
+        if (target) attackers.forEach((unit) => this.commandAttack(unit, target));
+      }
+    });
+  }
+
+  autoAcquireTarget(unit) {
+    if (unit.type === "worker") return;
+    const target = [...this.state.units, ...this.state.buildings]
+      .filter((entry) => entry.ownerId !== unit.ownerId && !entry.dead)
+      .sort((a, b) => distanceSq(unit, a) - distanceSq(unit, b))[0];
+    if (target && distance(unit, target) <= 180) {
+      this.commandAttack(unit, target);
     }
   }
 
@@ -983,310 +876,185 @@ export class GameScene extends Phaser.Scene {
     return false;
   }
 
-  findNearestDropOff(owner, from) {
+  getMoveSpeed(unit) {
+    return unit.def.speed * unit.faction.modifiers.moveSpeed;
+  }
+
+  getDamage(entity) {
+    if (entity.kind === "building") return entity.def.damage ?? 0;
+    if (entity.type === "swordsman") return entity.def.damage * entity.faction.modifiers.meleeDamage;
+    if (entity.type === "archer") return entity.def.damage * entity.faction.modifiers.rangedDamage;
+    return entity.def.damage;
+  }
+
+  getGatherRate(unit) {
+    return unit.faction.modifiers.gatherRate;
+  }
+
+  handleCommandButton(def) {
+    if (def.type === "cancel") {
+      this.cancelBuildMode();
+      return;
+    }
+    if (def.type === "build") {
+      this.enterBuildMode(def.value);
+      return;
+    }
+    if (def.type === "train") {
+      const building = this.getSingleSelectedBuilding();
+      if (building) this.issueCommands([{ kind: "train", buildingId: building.id, unitType: def.value }]);
+    }
+  }
+
+  enterBuildMode(type) {
+    if (!this.state.selected.some((entry) => entry.kind === "unit" && entry.type === "worker")) return;
+    this.cancelBuildMode();
+    const def = BUILDING_DEFS[type];
+    this.state.buildMode = type;
+    this.state.placingGhost = this.add.rectangle(0, 0, def.size, def.size, 0xa8d99d, 0.3).setStrokeStyle(2, 0xf4f1d0, 0.9);
+    this.state.placingGhost.setDepth(1000);
+  }
+
+  cancelBuildMode() {
+    this.state.buildMode = null;
+    this.state.placingGhost?.destroy();
+    this.state.placingGhost = null;
+  }
+
+  tryPlaceBuilding(worldPoint) {
+    if (!this.state.buildMode) return;
+    const workers = this.state.selected.filter((entry) => entry.kind === "unit" && entry.type === "worker").map((entry) => entry.id);
+    if (workers.length === 0) return;
+    this.issueCommands([{ kind: "place_building", buildingType: this.state.buildMode, workerIds: workers, point: worldPoint }]);
+    this.cancelBuildMode();
+  }
+
+  canPlaceBuilding(type, x, y) {
+    const size = BUILDING_DEFS[type].size;
+    const padding = size / 2 + 20;
+    if (x < padding || y < padding || x > MAP_WIDTH - padding || y > MAP_HEIGHT - padding) return { ok: false, reason: "Edge blocked" };
+    if (this.state.buildings.some((entry) => distance(entry, { x, y }) < (entry.def.size + size) * 0.65)) return { ok: false, reason: "Area blocked" };
+    if (this.state.resourcesNodes.some((entry) => distance(entry, { x, y }) < entry.radius + size * 0.7)) return { ok: false, reason: "Near resources" };
+    return { ok: true };
+  }
+
+  queueTraining(building, type) {
+    const owner = this.state.players[building.ownerId];
+    const def = UNIT_DEFS[type];
+    if (!building.completed || !building.def.canTrain?.includes(type)) return false;
+    if (owner.resources.supplyUsed + def.cost.supply > owner.resources.supplyCap) return false;
+    if (!this.payCost(building.ownerId, def.cost)) return false;
+    building.queue.push({ type, remaining: def.trainTime });
+    this.updateSupply(building.ownerId);
+    return true;
+  }
+
+  payCost(ownerId, cost) {
+    if (!cost) return true;
+    const res = this.state.players[ownerId].resources;
+    if (res.gold < (cost.gold ?? 0) || res.wood < (cost.wood ?? 0)) return false;
+    res.gold -= cost.gold ?? 0;
+    res.wood -= cost.wood ?? 0;
+    return true;
+  }
+
+  updateSupply(ownerId) {
+    const owner = this.state.players[ownerId];
+    owner.resources.supplyCap = this.state.buildings
+      .filter((entry) => entry.ownerId === ownerId && !entry.dead && (entry.completed || entry.type === "townhall"))
+      .reduce((sum, entry) => sum + (entry.def.supplyProvided ?? 0), 0);
+    const queued = this.state.buildings
+      .filter((entry) => entry.ownerId === ownerId && !entry.dead)
+      .reduce((sum, entry) => sum + entry.queue.reduce((inner, queueItem) => inner + UNIT_DEFS[queueItem.type].cost.supply, 0), 0);
+    owner.resources.supplyUsed = this.state.units
+      .filter((entry) => entry.ownerId === ownerId && !entry.dead)
+      .reduce((sum, entry) => sum + entry.def.cost.supply, 0) + queued;
+  }
+
+  findNearestDropOff(ownerId, from) {
     return this.state.buildings
-      .filter((building) => building.owner === owner && building.completed && ["townhall"].includes(building.type) && !building.dead)
+      .filter((entry) => entry.ownerId === ownerId && entry.type === "townhall" && entry.completed && !entry.dead)
       .sort((a, b) => distanceSq(from, a) - distanceSq(from, b))[0];
   }
 
   findClosestResource(from, type) {
     return this.state.resourcesNodes
-      .filter((node) => node.type === type && node.amount > 0 && !node.dead)
+      .filter((entry) => entry.type === type && entry.amount > 0 && !entry.dead)
       .sort((a, b) => distanceSq(from, a) - distanceSq(from, b))[0];
   }
 
-  updateBuildings(delta, now) {
-    for (const building of this.state.buildings) {
-      if (building.dead) {
-        continue;
-      }
-
-      if (building.completed && building.queue.length) {
-        building.queue[0].remaining -= delta;
-        if (building.queue[0].remaining <= 0) {
-          const queueItem = building.queue.shift();
-          const spawnX = building.rallyPoint?.x ?? building.x + (building.owner === PLAYER ? 90 : -90);
-          const spawnY = building.rallyPoint?.y ?? building.y + 30;
-          const unit = this.spawnUnit(building.owner, queueItem.type, building.x + (building.owner === PLAYER ? 60 : -60), building.y + 18);
-          this.commandMove(unit, { x: spawnX, y: spawnY });
-          if (building.owner === PLAYER) {
-            this.showMessage(`${UNIT_DEFS[queueItem.type].label} ready.`);
-          }
-        }
-      }
-
-      if (building.completed && building.type === "tower") {
-        const target = [...this.state.units, ...this.state.buildings]
-          .filter((entity) => entity.owner !== building.owner && !entity.dead)
-          .sort((a, b) => distanceSq(building, a) - distanceSq(building, b))[0];
-        if (target && distance(building, target) <= building.def.range && now - building.lastAttackAt >= building.def.attackCooldown) {
-          building.lastAttackAt = now;
-          this.spawnProjectile(building, target, building.def.damage);
-        }
-      }
-
-      building.hpBg.setPosition(building.x, building.y - building.def.size / 2 - 10);
-      building.hpFill.setPosition(building.x - building.def.size / 2, building.y - building.def.size / 2 - 10);
-      building.hpFill.setDisplaySize(building.def.size * (building.hp / building.def.maxHp), 6);
-      building.selection.setPosition(building.x, building.y);
-      building.sprite.setPosition(building.x, building.y);
-      building.label.setPosition(building.x, building.y);
-    }
-  }
-
-  spawnProjectile(source, target, overrideDamage = null) {
-    const projectile = this.add.image(source.x, source.y, "projectile").setTint(source.owner === PLAYER ? 0xffefb0 : 0xff9b9b);
-    this.fxLayer.add(projectile);
-    this.state.projectiles.push({
-      x: source.x,
-      y: source.y,
-      source,
-      target,
-      damage: overrideDamage ?? source.def.damage,
-      speed: source.type === "archer" ? source.def.projectileSpeed : 320,
-      sprite: projectile
-    });
-  }
-
-  updateProjectiles(dt) {
-    for (const projectile of this.state.projectiles) {
-      if (projectile.dead) {
-        continue;
-      }
-
-      if (!projectile.target || projectile.target.dead) {
-        projectile.dead = true;
-        projectile.sprite.destroy();
-        continue;
-      }
-
-      const arrived = this.moveEntityTowards(projectile, projectile.target, projectile.speed * dt);
-      projectile.sprite.setPosition(projectile.x, projectile.y);
-      if (arrived) {
-        this.applyDamage(projectile.target, projectile.damage, projectile.source);
-        projectile.dead = true;
-        projectile.sprite.destroy();
-      }
-    }
-    this.state.projectiles = this.state.projectiles.filter((projectile) => !projectile.dead);
-  }
-
-  applyDamage(target, amount, source) {
-    if (target.dead) {
-      return;
-    }
+  applyDamage(target, amount) {
+    if (target.dead) return;
     target.hp -= amount;
     if (target.hp <= 0) {
       target.dead = true;
-      if (target.kind === "unit") {
-        this.refundSupply(target);
-      }
-      if (target.kind === "building") {
-        this.updateSupply(target.owner);
-      }
-      if (source?.owner === PLAYER && target.owner === ENEMY) {
-        this.showMessage(`${target.kind === "unit" ? target.def.label : target.def.label} destroyed.`);
-      }
-    }
-  }
-
-  updateAI(now) {
-    if (now < this.state.ai.nextDecisionAt || this.state.result) {
-      return;
-    }
-    this.state.ai.nextDecisionAt = now + 2300;
-
-    const enemyTownHall = this.state.buildings.find((building) => building.owner === ENEMY && building.type === "townhall" && !building.dead);
-    const enemyBarracks = this.state.buildings.find((building) => building.owner === ENEMY && building.type === "barracks" && !building.dead);
-    const enemyFarm = this.state.buildings.find((building) => building.owner === ENEMY && building.type === "farm" && !building.dead);
-    const enemyWorkers = this.state.units.filter((unit) => unit.owner === ENEMY && unit.type === "worker" && !unit.dead);
-
-    enemyWorkers.forEach((worker) => {
-      if (worker.state === "idle" || worker.state === "moving") {
-        const resource = this.findClosestResource(worker, this.state.resources[ENEMY].gold < this.state.resources[ENEMY].wood ? "gold" : "wood");
-        if (resource) {
-          this.commandGather(worker, resource);
-        }
-      }
-    });
-
-    if (enemyTownHall?.completed) {
-      if (enemyWorkers.length < 4) {
-        this.queueTraining(enemyTownHall, "worker");
-      }
-    }
-
-    if (!enemyFarm && enemyWorkers.length > 0) {
-      const worker = enemyWorkers[0];
-      if (this.payCost(ENEMY, BUILDING_DEFS.farm.cost)) {
-        const farm = this.spawnBuilding(ENEMY, "farm", enemyTownHall.x - 130, enemyTownHall.y - 110, false);
-        worker.buildTarget = farm;
-        worker.state = "building";
-        worker.moveTarget = { x: farm.x + 20, y: farm.y + 20 };
-      }
-    } else if (!enemyBarracks && enemyWorkers.length > 1 && this.state.resources[ENEMY].wood >= BUILDING_DEFS.barracks.cost.wood) {
-      const worker = enemyWorkers[1];
-      if (this.payCost(ENEMY, BUILDING_DEFS.barracks.cost)) {
-        const barracks = this.spawnBuilding(ENEMY, "barracks", enemyTownHall.x - 100, enemyTownHall.y + 110, false);
-        worker.buildTarget = barracks;
-        worker.state = "building";
-        worker.moveTarget = { x: barracks.x + 20, y: barracks.y };
-      }
-    }
-
-    if (enemyBarracks?.completed) {
-      const meleeCount = this.state.units.filter((unit) => unit.owner === ENEMY && unit.type === "swordsman" && !unit.dead).length;
-      const rangedCount = this.state.units.filter((unit) => unit.owner === ENEMY && unit.type === "archer" && !unit.dead).length;
-      this.queueTraining(enemyBarracks, meleeCount <= rangedCount ? "swordsman" : "archer");
-    }
-
-    if (now >= this.state.ai.nextAttackAt) {
-      this.state.ai.nextAttackAt = now + Phaser.Math.Between(9000, 13500);
-      const attackers = this.state.units.filter((unit) => unit.owner === ENEMY && !unit.dead && unit.type !== "worker");
-      const playerTarget = [...this.state.units, ...this.state.buildings]
-        .filter((entity) => entity.owner === PLAYER && !entity.dead)
-        .sort((a, b) => distanceSq(enemyTownHall ?? { x: 0, y: 0 }, a) - distanceSq(enemyTownHall ?? { x: 0, y: 0 }, b))[0];
-      if (playerTarget) {
-        attackers.forEach((unit) => this.commandAttack(unit, playerTarget));
-      }
+      this.updateSupply(target.ownerId);
     }
   }
 
   cleanupDestroyed() {
-    this.state.resourcesNodes = this.state.resourcesNodes.filter((node) => {
-      if (node.amount > 0 && !node.dead) {
-        return true;
-      }
-      node.dead = true;
-      node.sprite.destroy();
+    this.state.resourcesNodes = this.state.resourcesNodes.filter((entry) => {
+      if (entry.amount > 0 && !entry.dead) return true;
+      entry.sprite.destroy();
       return false;
     });
-
-    this.state.units = this.state.units.filter((unit) => {
-      if (!unit.dead) {
-        return true;
-      }
-      if (this.state.selected.includes(unit)) {
-        unit.selection.setVisible(false);
-        this.state.selected = this.state.selected.filter((entity) => entity !== unit);
-      }
-      unit.sprite.destroy();
-      unit.hpBg.destroy();
-      unit.hpFill.destroy();
-      unit.selection.destroy();
+    this.state.units = this.state.units.filter((entry) => {
+      if (!entry.dead) return true;
+      entry.sprite.destroy();
+      entry.hpBg.destroy();
+      entry.hpFill.destroy();
+      entry.selection.destroy();
       return false;
     });
-
-    this.state.buildings = this.state.buildings.filter((building) => {
-      if (!building.dead) {
-        return true;
-      }
-      if (this.state.selected.includes(building)) {
-        building.selection.setVisible(false);
-        this.state.selected = this.state.selected.filter((entity) => entity !== building);
-      }
-      building.sprite.destroy();
-      building.label.destroy();
-      building.hpBg.destroy();
-      building.hpFill.destroy();
-      building.selection.destroy();
+    this.state.buildings = this.state.buildings.filter((entry) => {
+      if (!entry.dead) return true;
+      entry.sprite.destroy();
+      entry.hpBg.destroy();
+      entry.hpFill.destroy();
+      entry.selection.destroy();
+      entry.label.destroy();
       return false;
     });
   }
 
-  updateUI(now) {
-    const playerRes = this.state.resources[PLAYER];
-    this.ui.stats.setText(
-      `Gold ${Math.floor(playerRes.gold)}   Wood ${Math.floor(playerRes.wood)}   Supply ${playerRes.supplyUsed}/${playerRes.supplyCap}`
-    );
-
-    if (this.state.messageUntil > now) {
-      this.ui.status.setText(this.state.message);
-    } else {
-      this.ui.status.setText("Destroy the enemy Town Hall.");
-    }
-
-    const selected = this.state.selected;
-    if (selected.length === 0) {
-      this.ui.selection.setText("No selection");
-      this.ui.details.setText("Select workers to harvest or build. Select structures to queue units.");
-    } else if (selected.length === 1) {
-      const entity = selected[0];
-      const progress =
-        entity.kind === "building" && entity.queue.length
-          ? `Queue: ${entity.queue.map((item) => UNIT_DEFS[item.type].label).join(", ")}`
-          : entity.kind === "building" && !entity.completed
-            ? `Construction ${Math.floor((entity.buildProgress / entity.def.buildTime) * 100)}%`
-            : entity.kind === "unit" && entity.carry
-              ? `Carrying ${Math.floor(entity.carry.amount)} ${entity.carry.type}`
-              : entity.kind === "unit"
-                ? `DMG ${entity.def.damage}  Range ${entity.def.range}  Speed ${entity.def.speed}`
-                : `HP ${Math.ceil(entity.hp)}/${entity.def.maxHp}`;
-
-      this.ui.selection.setText(`${entity.def.label}  HP ${Math.max(0, Math.ceil(entity.hp))}/${entity.def.maxHp}`);
-      this.ui.details.setText(progress);
-    } else {
-      const countByType = selected.reduce((acc, entity) => {
-        acc[entity.def.label] = (acc[entity.def.label] ?? 0) + 1;
-        return acc;
-      }, {});
-      this.ui.selection.setText(`${selected.length} selected`);
-      this.ui.details.setText(Object.entries(countByType).map(([label, count]) => `${label} x${count}`).join("   "));
-    }
-
-    this.refreshButtons();
-    if (this.state.result) {
-      this.ui.result.setVisible(true).setText(this.state.result);
-    }
+  checkEndConditions() {
+    const livingTownHalls = this.state.buildings.filter((entry) => entry.type === "townhall" && !entry.dead);
+    const localAlive = livingTownHalls.some((entry) => entry.ownerId === this.localPlayerId);
+    const hostileAlive = livingTownHalls.some((entry) => entry.ownerId !== this.localPlayerId);
+    if (!localAlive) this.state.result = "Defeat";
+    if (localAlive && !hostileAlive) this.state.result = "Victory";
   }
 
-  refreshButtons() {
-    const selected = this.state.selected;
-    const singleBuilding = this.getSingleSelectedBuilding();
-    const hasWorker = selected.some((entity) => entity.kind === "unit" && entity.type === "worker");
-
-    this.ui.buttons.forEach((button) => {
-      let visible = false;
-      let enabled = false;
-      let subtitle = "";
-
-      if (button.type === "build") {
-        visible = hasWorker;
-        enabled = visible;
-        subtitle = formatCost(BUILDING_DEFS[button.value].cost);
-      } else if (button.type === "train") {
-        visible = Boolean(singleBuilding?.completed && singleBuilding.def.canTrain?.includes(button.value));
-        enabled = visible;
-        subtitle = formatCost(UNIT_DEFS[button.value].cost);
-      } else if (button.type === "cancel") {
-        visible = this.state.buildMode !== null || Boolean(singleBuilding?.queue.length);
-        enabled = visible;
-      }
-
-      button.container.setVisible(visible);
-      button.bg.setFillStyle(enabled ? 0x2a241e : 0x1d1813, 0.96);
-      button.text.setText(subtitle ? `${button.label}\n${subtitle}` : button.label);
-      button.text.setFontSize(subtitle ? "13px" : "16px");
-      button.text.setAlign("center");
-      button.text.setOrigin(0.5);
-    });
+  updateSelectionBox() {
+    this.selectionGraphics.clear();
+    if (!this.dragSelect.active) return;
+    const cam = this.cameras.main;
+    const x = Math.min(this.dragSelect.start.x, this.dragSelect.end.x) - cam.scrollX;
+    const y = Math.min(this.dragSelect.start.y, this.dragSelect.end.y) - cam.scrollY;
+    const width = Math.abs(this.dragSelect.start.x - this.dragSelect.end.x);
+    const height = Math.abs(this.dragSelect.start.y - this.dragSelect.end.y);
+    this.selectionGraphics.lineStyle(1, 0xf4f1d0, 0.95);
+    this.selectionGraphics.fillStyle(0xf4f1d0, 0.14);
+    this.selectionGraphics.fillRect(x, y, width, height);
+    this.selectionGraphics.strokeRect(x, y, width, height);
   }
 
-  updateSupply(owner) {
-    const supplyCap = this.state.buildings
-      .filter((building) => building.owner === owner && !building.dead && (building.completed || building.type === "townhall"))
-      .reduce((sum, building) => sum + (building.def.supplyProvided ?? 0), 0);
-    const trainedQueueSupply = this.state.buildings
-      .filter((building) => building.owner === owner && !building.dead)
-      .reduce(
-        (sum, building) => sum + building.queue.reduce((inner, item) => inner + UNIT_DEFS[item.type].cost.supply, 0),
-        0
-      );
-    const supplyUsed = this.state.units
-      .filter((unit) => unit.owner === owner && !unit.dead)
-      .reduce((sum, unit) => sum + unit.def.cost.supply, 0) + trainedQueueSupply;
-    this.state.resources[owner].supplyCap = supplyCap;
-    this.state.resources[owner].supplyUsed = supplyUsed;
+  updateGhostPlacement() {
+    if (!this.state.placingGhost || !this.state.buildMode) return;
+    const canPlace = this.canPlaceBuilding(this.state.buildMode, this.state.placingGhost.x, this.state.placingGhost.y);
+    this.state.placingGhost.setFillStyle(canPlace.ok ? 0x9fcf8a : 0xcd6f6f, 0.28);
+  }
+
+  getSingleSelectedBuilding() {
+    return this.state.selected.length === 1 && this.state.selected[0].kind === "building" ? this.state.selected[0] : null;
+  }
+
+  showCommandMarker(x, y, color) {
+    this.commandMarker.clear();
+    this.commandMarker.lineStyle(2, color, 0.9);
+    this.commandMarker.strokeCircle(x, y, 18);
+    this.commandMarker.strokeCircle(x, y, 10);
+    this.time.delayedCall(260, () => this.commandMarker.clear());
   }
 
   showMessage(message) {
@@ -1294,20 +1062,214 @@ export class GameScene extends Phaser.Scene {
     this.state.messageUntil = this.time.now + 2400;
   }
 
-  checkEndConditions() {
-    if (this.state.result) {
+  updateUI(now) {
+    const player = this.state.players[this.localPlayerId];
+    if (!player) return;
+    this.ui.stats.setText(
+      `Gold ${Math.floor(player.resources.gold)}   Wood ${Math.floor(player.resources.wood)}   Supply ${player.resources.supplyUsed}/${player.resources.supplyCap}`
+    );
+    this.ui.status.setText(this.state.result ?? (this.state.messageUntil > now ? this.state.message : `${player.factionDef.name} ready`));
+    this.ui.roster.setText(
+      this.roster.map((entry) => `${entry.playerId === this.localPlayerId ? ">" : " "} ${FACTION_DEFS[entry.faction].name}${entry.isHuman ? "" : " AI"}`).join("\n")
+    );
+
+    if (this.state.selected.length === 0) {
+      this.ui.selection.setText("No selection");
+      this.ui.details.setText(this.mode === "multiplayer" && !this.isHost && !this.state.snapshotSeen ? "Waiting for host world state..." : "Workers gather and build. Barracks train troops.");
+    } else if (this.state.selected.length === 1) {
+      const entity = this.state.selected[0];
+      this.ui.selection.setText(`${entity.def.label}  HP ${Math.max(0, Math.ceil(entity.hp))}/${entity.def.maxHp}`);
+      this.ui.details.setText(
+        entity.kind === "building"
+          ? entity.queue.length
+            ? `Queue: ${entity.queue.map((entry) => UNIT_DEFS[entry.type].label).join(", ")}`
+            : entity.completed
+              ? "Structure operational"
+              : `Construction ${Math.floor((entity.buildProgress / entity.def.buildTime) * 100)}%`
+          : entity.carry
+            ? `Carrying ${Math.floor(entity.carry.amount)} ${entity.carry.type}`
+            : `DMG ${Math.floor(this.getDamage(entity))}  Range ${entity.def.range}  Speed ${Math.floor(this.getMoveSpeed(entity))}`
+      );
+    } else {
+      this.ui.selection.setText(`${this.state.selected.length} selected`);
+      this.ui.details.setText(this.state.selected.map((entry) => entry.def.label).join(", "));
+    }
+
+    this.refreshButtons();
+    if (this.state.result) this.ui.result.setVisible(true).setText(this.state.result);
+  }
+
+  refreshButtons() {
+    const hasWorker = this.state.selected.some((entry) => entry.kind === "unit" && entry.type === "worker");
+    const building = this.getSingleSelectedBuilding();
+    this.ui.buttons.forEach((button) => {
+      let visible = false;
+      let subtitle = "";
+      if (button.type === "build") {
+        visible = hasWorker;
+        subtitle = formatCost(BUILDING_DEFS[button.value].cost);
+      } else if (button.type === "train") {
+        visible = Boolean(building?.completed && building.def.canTrain?.includes(button.value));
+        subtitle = formatCost(UNIT_DEFS[button.value].cost);
+      } else if (button.type === "cancel") {
+        visible = this.state.buildMode !== null;
+      }
+      button.container.setVisible(visible);
+      button.text.setText(subtitle ? `${button.label}\n${subtitle}` : button.label);
+      button.text.setFontSize(subtitle ? "13px" : "16px");
+    });
+  }
+
+  drawMinimap() {
+    const frame = this.ui.minimapFrame;
+    const width = frame.width - 12;
+    const height = frame.height - 12;
+    const x = frame.x + 6;
+    const y = frame.y + 6;
+    this.minimap.clear();
+    this.minimap.fillStyle(0x19211a, 0.94);
+    this.minimap.fillRect(x, y, width, height);
+    const scaleX = width / MAP_WIDTH;
+    const scaleY = height / MAP_HEIGHT;
+    this.state.resourcesNodes.forEach((entry) => {
+      this.minimap.fillStyle(RESOURCE_TYPES[entry.type].color, 0.8);
+      this.minimap.fillRect(x + entry.x * scaleX, y + entry.y * scaleY, 2, 2);
+    });
+    this.roster.forEach((entry) => {
+      const faction = FACTION_DEFS[entry.faction];
+      this.minimap.fillStyle(faction.color, 0.95);
+      this.state.units.filter((unit) => unit.ownerId === entry.playerId).forEach((unit) => this.minimap.fillRect(x + unit.x * scaleX, y + unit.y * scaleY, 3, 3));
+      this.state.buildings.filter((building) => building.ownerId === entry.playerId).forEach((building) => this.minimap.fillRect(x + building.x * scaleX, y + building.y * scaleY, 4, 4));
+    });
+    const cam = this.cameras.main;
+    this.minimap.lineStyle(1, 0xf5f1d5, 0.9);
+    this.minimap.strokeRect(x + cam.scrollX * scaleX, y + cam.scrollY * scaleY, cam.width / cam.zoom * scaleX, cam.height / cam.zoom * scaleY);
+  }
+
+  getEntityById(id) {
+    return [...this.state.units, ...this.state.buildings, ...this.state.resourcesNodes].find((entry) => entry.id === id);
+  }
+
+  serializeSnapshot() {
+    return {
+      type: "state",
+      payload: {
+        result: this.state.result,
+        players: Object.fromEntries(
+          Object.entries(this.state.players).map(([id, entry]) => [
+            id,
+            { resources: entry.resources, faction: entry.faction, name: entry.name, isHuman: entry.isHuman }
+          ])
+        ),
+        units: this.state.units.map((entry) => ({
+          id: entry.id,
+          ownerId: entry.ownerId,
+          type: entry.type,
+          x: entry.x,
+          y: entry.y,
+          hp: entry.hp,
+          state: entry.state,
+          carry: entry.carry
+        })),
+        buildings: this.state.buildings.map((entry) => ({
+          id: entry.id,
+          ownerId: entry.ownerId,
+          type: entry.type,
+          x: entry.x,
+          y: entry.y,
+          hp: entry.hp,
+          completed: entry.completed,
+          queue: entry.queue,
+          buildProgress: entry.buildProgress,
+          rallyPoint: entry.rallyPoint
+        })),
+        resourcesNodes: this.state.resourcesNodes.map((entry) => ({
+          id: entry.id,
+          type: entry.type,
+          x: entry.x,
+          y: entry.y,
+          amount: entry.amount
+        }))
+      }
+    };
+  }
+
+  broadcastSnapshot() {
+    this.netClient?.send("state", this.serializeSnapshot().payload);
+  }
+
+  applySnapshot(payload) {
+    this.state.snapshotSeen = true;
+    this.state.result = payload.result;
+    Object.entries(payload.players).forEach(([playerId, data]) => {
+      if (this.state.players[playerId]) {
+        this.state.players[playerId].resources = data.resources;
+      }
+    });
+    this.syncSnapshotEntities(payload.resourcesNodes, "resource");
+    this.syncSnapshotEntities(payload.buildings, "building");
+    this.syncSnapshotEntities(payload.units, "unit");
+  }
+
+  syncSnapshotEntities(entries, kind) {
+    if (kind === "resource") {
+      const incomingIds = new Set(entries.map((entry) => entry.id));
+      this.state.resourcesNodes.filter((entry) => !incomingIds.has(entry.id)).forEach((entry) => { entry.sprite.destroy(); entry.dead = true; });
+      this.state.resourcesNodes = this.state.resourcesNodes.filter((entry) => incomingIds.has(entry.id));
+      entries.forEach((data) => {
+        let entity = this.state.resourcesNodes.find((entry) => entry.id === data.id);
+        if (!entity) entity = this.spawnResource(data.type, data.x, data.y, data.amount);
+        entity.id = data.id;
+        entity.x = data.x;
+        entity.y = data.y;
+        entity.amount = data.amount;
+        entity.sprite.setPosition(entity.x, entity.y);
+      });
       return;
     }
 
-    const playerTownHallAlive = this.state.buildings.some((building) => building.owner === PLAYER && building.type === "townhall" && !building.dead);
-    const enemyTownHallAlive = this.state.buildings.some((building) => building.owner === ENEMY && building.type === "townhall" && !building.dead);
+    if (kind === "unit") {
+      const incomingIds = new Set(entries.map((entry) => entry.id));
+      this.state.units.filter((entry) => !incomingIds.has(entry.id)).forEach((entry) => {
+        entry.sprite.destroy(); entry.hpBg.destroy(); entry.hpFill.destroy(); entry.selection.destroy(); entry.dead = true;
+      });
+      this.state.units = this.state.units.filter((entry) => incomingIds.has(entry.id));
+      entries.forEach((data) => {
+        let entity = this.state.units.find((entry) => entry.id === data.id);
+        if (!entity) entity = this.spawnUnit(data.ownerId, data.type, data.x, data.y, data.id);
+        entity.x = data.x;
+        entity.y = data.y;
+        entity.hp = data.hp;
+        entity.carry = data.carry;
+        entity.state = data.state;
+        entity.sprite.setPosition(entity.x, entity.y);
+        entity.hpBg.setPosition(entity.x, entity.y - 18);
+        entity.hpFill.setPosition(entity.x - 15, entity.y - 18).setDisplaySize(30 * (entity.hp / entity.def.maxHp), 4);
+      });
+      return;
+    }
 
-    if (!enemyTownHallAlive) {
-      this.state.result = "Victory";
-      this.showMessage("Enemy fortress shattered.");
-    } else if (!playerTownHallAlive) {
-      this.state.result = "Defeat";
-      this.showMessage("Your stronghold has fallen.");
+    if (kind === "building") {
+      const incomingIds = new Set(entries.map((entry) => entry.id));
+      this.state.buildings.filter((entry) => !incomingIds.has(entry.id)).forEach((entry) => {
+        entry.sprite.destroy(); entry.hpBg.destroy(); entry.hpFill.destroy(); entry.selection.destroy(); entry.label.destroy(); entry.dead = true;
+      });
+      this.state.buildings = this.state.buildings.filter((entry) => incomingIds.has(entry.id));
+      entries.forEach((data) => {
+        let entity = this.state.buildings.find((entry) => entry.id === data.id);
+        if (!entity) entity = this.spawnBuilding(data.ownerId, data.type, data.x, data.y, data.completed, data.id);
+        entity.x = data.x;
+        entity.y = data.y;
+        entity.hp = data.hp;
+        entity.completed = data.completed;
+        entity.queue = data.queue;
+        entity.buildProgress = data.buildProgress;
+        entity.rallyPoint = data.rallyPoint;
+        entity.sprite.setPosition(entity.x, entity.y).setAlpha(entity.completed ? 1 : 0.58);
+        entity.label.setPosition(entity.x, entity.y).setAlpha(entity.completed ? 1 : 0.72);
+        entity.hpBg.setPosition(entity.x, entity.y - entity.def.size / 2 - 10);
+        entity.hpFill.setPosition(entity.x - entity.def.size / 2, entity.y - entity.def.size / 2 - 10).setDisplaySize(entity.def.size * (entity.hp / entity.def.maxHp), 6);
+      });
     }
   }
 }

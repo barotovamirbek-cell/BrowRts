@@ -1,54 +1,84 @@
 # Ironfront RTS
 
-Играбельная RTS на Phaser с классическим циклом:
+Fantasy RTS on Phaser with four factions and optional WebSocket multiplayer.
 
-- выделение юнитов рамкой и кликом
-- команды правой кнопкой
-- добыча золота и дерева рабочими
-- строительство `Farm`, `Barracks`, `Tower`
-- производство `Worker`, `Swordsman`, `Archer`
-- вражеская база и базовый AI
-- победа и поражение по уничтожению `Town Hall`
+## Features
 
-## Запуск
+- 4 factions: `Kingdom`, `Wildkin`, `Dusk Legion`, `Ember Court`
+- faction selection menu before match start
+- solo skirmish with AI opponents
+- multiplayer lobby flow: host room / join room
+- resource gathering, building, unit training, combat
+- minimap
+- RTS controls with drag selection and right-click orders
 
-Требования:
+## Stack
 
-- Node.js 20+
+- Phaser 3
+- Vite
+- Node.js WebSocket server via `ws`
 
-Команды:
+## Run
+
+Install dependencies:
 
 ```bash
 npm install
+```
+
+Client only:
+
+```bash
 npm run dev
 ```
 
-Сборка production:
+Multiplayer server:
+
+```bash
+npm run dev:server
+```
+
+Production build:
 
 ```bash
 npm run build
 ```
 
-Для GitHub Pages проект уже настроен с `base: "/BrowRts/"`.
-Если GitHub Pages упрямо отдает не тот артефакт, можно публиковать готовую сборку из папки `docs/`:
-`Settings -> Pages -> Deploy from a branch -> main -> /docs`.
+## Multiplayer
 
-Локальный адрес dev-сервера по умолчанию: `http://127.0.0.1:5173/`
+Multiplayer is server-backed. Run the Vite client and the Node server together on your machine:
 
-## Управление
+1. `npm run dev:server`
+2. `npm run dev`
+3. Open the game in two browser windows
+4. In one window choose `Host Multiplayer`
+5. In the second choose `Join Multiplayer` and enter the room code
 
-- `ЛКМ` по юниту или зданию: выбор
-- `ЛКМ + drag`: рамка выделения
-- `Shift + ЛКМ`: добавить к выделению
-- `ПКМ`: движение, атака, сбор, точка выхода
-- `W A S D` или подвод курсора к краю: движение камеры
-- `Колесо мыши`: масштаб
-- `B`: быстрый вход в режим постройки `Farm`, если выбран рабочий
-- `X`: стоп для выделенных юнитов
-- `H`: центр камеры на своей ратуше
-- `1`, `2`, `3`: выбрать всех своих `Worker`, `Swordsman`, `Archer`
+Default local server address:
 
-## Заметки
+- client: `http://127.0.0.1:5173/`
+- WebSocket server: `ws://localhost:2567`
 
-- Проект полностью самодостаточный: визуалы процедурные, без внешних игровых ассетов.
-- Референс `Ashen Crown` использован только как ориентир по темпу, читаемости и RTS-ощущению, без копирования контента.
+## Controls
+
+- `LMB`: select unit or building
+- `LMB drag`: selection box
+- `Shift + LMB`: add to selection
+- `RMB`: move / attack / gather / set rally point
+- `W A S D` or screen edges: move camera
+- mouse wheel: zoom
+- `B`: build mode with selected worker
+- `X`: stop selected units
+- `H`: center camera on your town hall
+
+## GitHub Pages
+
+Static deployment is available from `docs/`, but GitHub Pages only hosts the client build.
+
+Important:
+
+- solo mode works on Pages
+- multiplayer does not work on plain GitHub Pages by itself
+- multiplayer needs a separately running WebSocket server
+
+If you want online multiplayer on the public site, deploy `server/server.js` on a real Node host and point the client to that WebSocket URL.
