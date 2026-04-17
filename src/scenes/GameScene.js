@@ -404,6 +404,23 @@ export class GameScene extends Phaser.Scene {
     cam.scrollY = clamp(cam.scrollY, 0, MAP_HEIGHT - cam.height / cam.zoom);
   }
 
+  isPointerOverHud(pointer) {
+    if (!this.ui) return false;
+    const { x, y } = pointer;
+
+    const topBounds = this.ui.topBar.getBounds();
+    if (x >= topBounds.left && x <= topBounds.right && y >= topBounds.top && y <= topBounds.bottom) {
+      return true;
+    }
+
+    const bottomBounds = this.ui.bottomBar.getBounds();
+    if (x >= bottomBounds.left && x <= bottomBounds.right && y >= bottomBounds.top && y <= bottomBounds.bottom) {
+      return true;
+    }
+
+    return false;
+  }
+
   setupInput() {
     this.keys = this.input.keyboard.addKeys({
       left: Phaser.Input.Keyboard.KeyCodes.A,
@@ -419,6 +436,9 @@ export class GameScene extends Phaser.Scene {
 
     this.input.on("pointerdown", (pointer) => {
       if (this.isPointerOverMinimap(pointer)) {
+        return;
+      }
+      if (this.isPointerOverHud(pointer)) {
         return;
       }
 
