@@ -257,6 +257,16 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (message.type === "request_state") {
+      const host = room.players.find((entry) => entry.id === room.hostId);
+      if (host) {
+        send(host.ws, "request_state", {
+          fromPlayerId: player.id
+        });
+      }
+      return;
+    }
+
     if (message.type === "state" && player.id === room.hostId) {
       room.players.forEach((entry) => {
         if (entry.id !== player.id) {

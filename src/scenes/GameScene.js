@@ -184,6 +184,9 @@ export class GameScene extends Phaser.Scene {
 
     if (this.isHost) {
       this.createWorldState();
+      if (this.mode === "multiplayer") {
+        this.time.delayedCall(180, () => this.broadcastSnapshot());
+      }
       this.centerCameraOnLocalBase(true);
       this.showMessage("Expand, train and break the rival factions.");
     } else {
@@ -209,6 +212,23 @@ export class GameScene extends Phaser.Scene {
       }
       this.applySnapshot(message);
     });
+
+    this.netClient.on("request_state", () => {
+      if (!this.isHost) {
+        return;
+      }
+      if (this.state.units.length === 0 && this.state.buildings.length === 0) {
+        this.time.delayedCall(120, () => this.broadcastSnapshot());
+        return;
+      }
+      this.broadcastSnapshot();
+    });
+
+    if (!this.isHost) {
+      this.time.delayedCall(120, () => {
+        this.netClient?.send("request_state");
+      });
+    }
   }
 
   createMap() {
