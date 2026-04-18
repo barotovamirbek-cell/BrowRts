@@ -323,7 +323,11 @@ export class MenuScene extends Phaser.Scene {
     }
     const stored = localStorage.getItem(WS_OVERRIDE_KEY)?.trim() ?? "";
     const configured = (ENV.VITE_MULTIPLAYER_WS_URL ?? "").trim();
-    const fallbackLocal = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:2567`;
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const currentPort = window.location.port ? `:${window.location.port}` : "";
+    const isVitePreview = ["5173", "4173"].includes(window.location.port);
+    const fallbackPort = isVitePreview ? ":2567" : currentPort;
+    const fallbackLocal = `${protocol}://${window.location.hostname || "localhost"}${fallbackPort}`;
     const candidate = query || stored || configured || (this.isPublicSite ? "" : fallbackLocal);
     if (this.isPublicSite && candidate && isLoopbackUrl(candidate)) {
       return "";

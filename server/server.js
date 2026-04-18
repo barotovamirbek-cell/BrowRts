@@ -1,8 +1,30 @@
-import { WebSocketServer } from "ws";
+import { createReadStream, existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import { createServer } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { WebSocket, WebSocketServer } from "ws";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname, "..");
+const distDir = path.join(projectRoot, "dist");
+
+const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 2567);
-const wss = new WebSocketServer({ port });
+const publicWsUrl = process.env.PUBLIC_WS_URL || "";
 const rooms = new Map();
+
+const MIME_TYPES = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8"
+};
 
 function randomCode() {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -14,7 +36,7 @@ function randomCode() {
 }
 
 function send(ws, type, payload = {}) {
-  if (ws.readyState === ws.OPEN) {
+  if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, ...payload }));
   }
 }
@@ -74,6 +96,8 @@ function removePlayer(player) {
 
   if (room.hostId === player.id) {
     room.hostId = room.players[0].id;
+    room.started = false;
+    broadcast(room, "error_message", { message: "Host disconnected. Lobby reset." });
   }
 
   room.players.forEach((entry, index) => {
@@ -83,9 +107,69 @@ function removePlayer(player) {
   announceLobby(room);
 }
 
+async function serveFile(filePath, res) {
+  const ext = path.extname(filePath).toLowerCase();
+  res.writeHead(200, { "Content-Type": MIME_TYPES[ext] || "application/octet-stream" });
+  createReadStream(filePath).pipe(res);
+}
+
+async function handleHttp(req, res) {
+  const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+  if (requestUrl.pathname === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, rooms: rooms.size, players: [...rooms.values()].reduce((sum, room) => sum + room.players.length, 0) }));
+    return;
+  }
+
+  if (!existsSync(distDir)) {
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("RTS server is running. Build the client to serve static files from this process.");
+    return;
+  }
+
+  const safePath = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
+  const targetPath = path.normalize(path.join(distDir, safePath));
+
+  if (!targetPath.startsWith(distDir)) {
+    res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Forbidden");
+    return;
+  }
+
+  try {
+    const fileStat = await stat(targetPath);
+    if (fileStat.isFile()) {
+      await serveFile(targetPath, res);
+      return;
+    }
+  } catch {
+    // fall through to SPA fallback
+  }
+
+  await serveFile(path.join(distDir, "index.html"), res);
+}
+
+const server = createServer((req, res) => {
+  handleHttp(req, res).catch((error) => {
+    console.error(error);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+    }
+    res.end("Internal server error");
+  });
+});
+
+const wss = new WebSocketServer({ server });
+
 let nextPlayerId = 1;
 
 wss.on("connection", (ws) => {
+  ws.isAlive = true;
+  ws.on("pong", () => {
+    ws.isAlive = true;
+  });
+
   const player = {
     id: `p${nextPlayerId++}`,
     ws,
@@ -187,4 +271,27 @@ wss.on("connection", (ws) => {
   });
 });
 
-console.log(`RTS multiplayer server listening on ws://localhost:${port}`);
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (!ws.isAlive) {
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on("close", () => {
+  clearInterval(heartbeatInterval);
+});
+
+server.listen(port, host, () => {
+  const httpUrl = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+  const wsUrl = publicWsUrl || `ws://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+  console.log(`Ironfront server listening on ${httpUrl}`);
+  console.log(`WebSocket endpoint: ${wsUrl}`);
+  if (existsSync(distDir)) {
+    console.log(`Serving static client from ${distDir}`);
+  }
+});

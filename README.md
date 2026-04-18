@@ -16,7 +16,7 @@ Fantasy RTS on Phaser with four factions and optional WebSocket multiplayer.
 
 - Phaser 3
 - Vite
-- Node.js WebSocket server via `ws`
+- lightweight Node.js HTTP + WebSocket server via `ws`
 
 ## Art Assets
 
@@ -61,9 +61,19 @@ Production build:
 npm run build
 ```
 
+Production server:
+
+```bash
+npm start
+```
+
 ## Multiplayer
 
-Multiplayer is server-backed. Run the Vite client and the Node server together on your machine:
+Multiplayer is relay-based. The VPS does not simulate the whole match. The host player's browser runs the game state, and the Node server only keeps lobby state and relays `input` / `state` messages.
+
+That keeps resource usage low and works well on a weak VPS. The tradeoff is that if the host player disconnects, the match is interrupted.
+
+Run the Vite client and the Node server together on your machine:
 
 1. `npm run dev:server`
 2. `npm run dev`
@@ -82,6 +92,44 @@ On public deployments you can set server URL directly in menu:
 - button: `Apply Server URL`
 - requirement on `https` site: use `wss://...` (not `ws://...`)
 - example: `wss://your-rts-server.onrender.com`
+
+If the game client is opened from the same server that hosts the backend, the menu now auto-detects that server URL.
+
+## VPS Deploy
+
+Build locally or on the VPS:
+
+```bash
+npm install
+npm run build
+```
+
+Run the single lightweight server process:
+
+```bash
+$env:HOST="0.0.0.0"
+$env:PORT="2567"
+$env:PUBLIC_WS_URL="ws://132.243.24.25:2567"
+npm start
+```
+
+What this process does:
+
+- serves `dist/` over HTTP
+- accepts WebSocket connections on the same port
+- stores rooms in memory only
+- uses very little CPU/RAM because it is not a dedicated game simulation server
+
+Then open:
+
+- `http://132.243.24.25:2567/` if you serve the client from the VPS directly
+- or set `ws://132.243.24.25:2567` in the in-game `Server WS URL` field if the client is hosted elsewhere
+
+Important:
+
+- if your frontend is on `https://...`, browsers will block plain `ws://...`; use `wss://...` behind a reverse proxy
+- open TCP port `2567` in the VPS firewall/security group
+- for long-running hosting use PM2, systemd, or another process manager
 
 ## Controls
 

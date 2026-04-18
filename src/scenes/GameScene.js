@@ -56,7 +56,7 @@ const RESOURCE_VISUALS = {
   gold: { frame: 5, scale: 2.7, shadowScale: [1.3, 0.95] }
 };
 
-const WOOD_CLUSTER_FRAMES = [99, 118, 119, 137, 138, 139];
+const FOREST_TREE_TEXTURES = ["forest-tree-a", "forest-tree-b", "forest-tree-c"];
 const FOG_CELL_SIZE = 44;
 
 const COMMAND_GRID_KEYS = [
@@ -459,7 +459,16 @@ export class GameScene extends Phaser.Scene {
       [2870, 940],
       [2010, 410],
       [1120, 410]
-    ].forEach(([x, y]) => this.spawnWoodCluster(x, y, 3, 130, 2200));
+    ].forEach(([x, y]) =>
+      this.spawnForestPatch(x, y, {
+        columns: 3,
+        rows: 2,
+        stepX: 78,
+        stepY: 74,
+        jitter: 12,
+        amount: 1450
+      })
+    );
   }
 
   spawnStartingBase(ownerId, x, y, slotIndex) {
@@ -484,33 +493,85 @@ export class GameScene extends Phaser.Scene {
     const dir = this.getSpawnDirection(slotIndex);
     const perpendicular = { x: -dir.y, y: dir.x };
     this.spawnResource("gold", baseX + dir.x * 208, baseY + dir.y * 152, 2600, { maxAmount: 2600 });
-    this.spawnWoodCluster(baseX + dir.x * 296 + perpendicular.x * 122, baseY + dir.y * 224 + perpendicular.y * 122, 3, 92, 2300);
-    this.spawnWoodCluster(baseX + dir.x * 318 - perpendicular.x * 118, baseY + dir.y * 236 - perpendicular.y * 118, 3, 92, 2300);
+    const forestCenterX = baseX + dir.x * 392;
+    const forestCenterY = baseY + dir.y * 296;
+    this.spawnForestPatch(forestCenterX + perpendicular.x * 116, forestCenterY + perpendicular.y * 116, {
+      columns: 4,
+      rows: 3,
+      stepX: 70,
+      stepY: 68,
+      jitter: 10,
+      amount: 1180,
+      axis: perpendicular,
+      depthAxis: dir
+    });
+    this.spawnForestPatch(forestCenterX - perpendicular.x * 116, forestCenterY - perpendicular.y * 116, {
+      columns: 4,
+      rows: 3,
+      stepX: 70,
+      stepY: 68,
+      jitter: 10,
+      amount: 1180,
+      axis: perpendicular,
+      depthAxis: dir
+    });
   }
 
-  spawnWoodCluster(centerX, centerY, nodes = 3, spread = 120, amount = 2200) {
-    for (let i = 0; i < nodes; i += 1) {
-      let placed = false;
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-        const radius = Phaser.Math.Between(Math.floor(spread * 0.28), spread);
-        const candidate = {
-          x: centerX + Math.cos(angle) * radius,
-          y: centerY + Math.sin(angle) * radius
-        };
-        if (candidate.x < 120 || candidate.y < 120 || candidate.x > MAP_WIDTH - 120 || candidate.y > MAP_HEIGHT - 120) {
+  canPlaceResourceNode(x, y, minDistance = 66) {
+    if (x < 90 || y < 90 || x > MAP_WIDTH - 90 || y > MAP_HEIGHT - 90) {
+      return false;
+    }
+
+    const candidate = { x, y };
+    const farFromResources = this.state.resourcesNodes.every((entry) => distanceSq(entry, candidate) > minDistance * minDistance);
+    const farFromBuildings = this.state.buildings.every((entry) => distanceSq(entry, candidate) > (entry.def.size * 0.72 + minDistance) ** 2);
+    return farFromResources && farFromBuildings;
+  }
+
+  spawnForestPatch(centerX, centerY, options = {}) {
+    const {
+      columns = 3,
+      rows = 2,
+      stepX = 80,
+      stepY = 74,
+      jitter = 12,
+      amount = 1400,
+      axis = { x: 1, y: 0 },
+      depthAxis = { x: 0, y: 1 }
+    } = options;
+
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < columns; col += 1) {
+        const lateral = (col - (columns - 1) * 0.5) * stepX;
+        const depth = (row - (rows - 1) * 0.5) * stepY;
+        const targetX =
+          centerX +
+          axis.x * lateral +
+          depthAxis.x * depth +
+          Phaser.Math.Between(-jitter, jitter);
+        const targetY =
+          centerY +
+          axis.y * lateral +
+          depthAxis.y * depth +
+          Phaser.Math.Between(-jitter, jitter);
+
+        if (this.canPlaceResourceNode(targetX, targetY)) {
+          this.spawnResource("wood", targetX, targetY, amount, { maxAmount: amount });
           continue;
         }
-        const hasSpace = this.state.resourcesNodes.every((entry) => distanceSq(entry, candidate) > 82 * 82);
-        if (!hasSpace) {
-          continue;
+
+        let placed = false;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const retryX = targetX + Phaser.Math.Between(-26, 26);
+          const retryY = targetY + Phaser.Math.Between(-26, 26);
+          if (!this.canPlaceResourceNode(retryX, retryY)) {
+            continue;
+          }
+          this.spawnResource("wood", retryX, retryY, amount, { maxAmount: amount });
+          placed = true;
+          break;
         }
-        this.spawnResource("wood", candidate.x, candidate.y, amount, { maxAmount: amount });
-        placed = true;
-        break;
-      }
-      if (!placed) {
-        this.spawnResource("wood", centerX + i * 42 - nodes * 20, centerY + i * 28 - nodes * 12, amount, { maxAmount: amount });
+
       }
     }
   }
@@ -865,36 +926,28 @@ export class GameScene extends Phaser.Scene {
       .setScale(visual.shadowScale[0], visual.shadowScale[1])
       .setAlpha(0.22)
       .setTint(0x000000);
-    const sprite = this.add.image(x, y, "tinyBattleTiles", visual.frame).setScale(visual.scale);
+    const sprite =
+      type === "wood"
+        ? this.add.image(x, y, Phaser.Utils.Array.GetRandom(FOREST_TREE_TEXTURES)).setOrigin(0.5, 0.88)
+        : this.add.image(x, y, "tinyBattleTiles", visual.frame).setScale(visual.scale);
     const decorations = [];
     let amountPlate = null;
     let amountText = null;
 
     if (type === "wood") {
       sprite
-        .setFrame(Phaser.Utils.Array.GetRandom(WOOD_CLUSTER_FRAMES))
-        .setScale(Phaser.Math.FloatBetween(2.35, 2.75))
+        .setScale(Phaser.Math.FloatBetween(0.92, 1.08))
         .setTint(
           Phaser.Display.Color.GetColor(
-            Phaser.Math.Between(126, 160),
-            Phaser.Math.Between(165, 210),
-            Phaser.Math.Between(102, 138)
+            Phaser.Math.Between(214, 255),
+            Phaser.Math.Between(218, 255),
+            Phaser.Math.Between(214, 255)
           )
         )
         .setDepth(y + 8);
-      const crown = this.add
-        .image(x + Phaser.Math.Between(-8, 8), y - Phaser.Math.Between(10, 18), "tinyBattleTiles", Phaser.Utils.Array.GetRandom(WOOD_CLUSTER_FRAMES))
-        .setScale(Phaser.Math.FloatBetween(2.1, 2.45))
-        .setTint(
-          Phaser.Display.Color.GetColor(
-            Phaser.Math.Between(132, 166),
-            Phaser.Math.Between(176, 218),
-            Phaser.Math.Between(108, 145)
-          )
-        )
-        .setAlpha(0.95)
-        .setDepth(y + 10);
-      decorations.push(crown);
+      shadow.setPosition(x, y + 14).setScale(1.08, 0.82).setAlpha(0.18);
+      const ground = this.add.ellipse(x, y + 8, 42, 16, 0x284120, 0.26).setDepth(y + 1);
+      decorations.push(ground);
     } else {
       amountPlate = this.add.rectangle(x, y + 34, 82, 16, 0x130f0c, 0.76).setStrokeStyle(1, 0x5a4a30, 0.95).setDepth(y + 36);
       amountText = this.add.text(x, y + 34, `${Math.floor(amount)}`, { fontSize: "11px", color: "#f4d986" }).setOrigin(0.5).setDepth(y + 37);
@@ -917,7 +970,7 @@ export class GameScene extends Phaser.Scene {
       decorations,
       amountPlate,
       amountText,
-      radius: type === "gold" ? 38 : 58
+      radius: type === "gold" ? 38 : 42
     };
     sprite.setData("entity", node);
     this.state.resourcesNodes.push(node);
