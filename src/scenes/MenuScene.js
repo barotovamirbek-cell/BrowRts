@@ -3,7 +3,6 @@ import { FACTION_DEFS, FACTION_ORDER } from "../game/factions.js";
 import { NetClient } from "../network/Client.js";
 import { loginWithCustomId, updateUserTitleDisplayName } from "../network/PlayFabClient.js";
 
-const WS_OVERRIDE_KEY = "ironfront.multiplayer.ws";
 const ENV = import.meta?.env ?? {};
 
 function isLoopbackUrl(url) {
@@ -53,7 +52,7 @@ export class MenuScene extends Phaser.Scene {
       56,
       736,
       this.isPublicSite
-        ? "Public site: solo works here. Multiplayer needs external WSS server URL."
+        ? "Public site: multiplayer uses the built-in backend URL from the build config."
         : "Local build: start the Node websocket server before using multiplayer.",
       { fontSize: "15px", color: "#aa9f8f", wordWrap: { width: 780 } }
     );
@@ -85,8 +84,7 @@ export class MenuScene extends Phaser.Scene {
       this.lobbyPlayersText,
       this.startMatchButton.startBox,
       this.startMatchButton.startText,
-      this.serverApplyButton.box,
-      this.serverApplyButton.text,
+      this.serverLabel,
       this.serverUrlText,
       this.renameButton.box,
       this.renameButton.text
@@ -192,25 +190,20 @@ export class MenuScene extends Phaser.Scene {
     });
     this.add.text(width - 350, 150, "Name", { fontSize: "15px", color: "#b9b1a4" });
     this.add.text(width - 350, 216, "Room Code", { fontSize: "15px", color: "#b9b1a4" });
-    this.add.text(width - 350, 282, "Server WS URL", { fontSize: "15px", color: "#b9b1a4" });
+    this.serverLabel = this.add.text(width - 350, 282, "Game Server", { fontSize: "15px", color: "#b9b1a4" });
 
-    this.serverUrlText = this.add.text(width - 350, 390, `WS: ${this.serverUrl || "not set"}`, {
+    this.serverUrlText = this.add.text(width - 350, 312, this.getServerStatusText(), {
       fontSize: "14px",
       color: "#aa9f8f",
       wordWrap: { width: 260 }
     });
-    this.lobbyRoomText = this.add.text(width - 350, 418, "Room: none", { fontSize: "18px", color: "#f4efe2" });
-    this.lobbyPlayersText = this.add.text(width - 350, 450, "Players:\n-", {
+    this.lobbyRoomText = this.add.text(width - 350, 392, "Room: none", { fontSize: "18px", color: "#f4efe2" });
+    this.lobbyPlayersText = this.add.text(width - 350, 424, "Players:\n-", {
       fontSize: "16px",
       color: "#dfd9cf",
       lineSpacing: 7,
       wordWrap: { width: 260 }
     });
-
-    const applyBox = this.add.rectangle(width - 350, 342, 260, 38, 0x2c241a, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
-    const applyText = this.add.text(width - 220, 361, "Apply Server URL", { fontSize: "17px", color: "#f4efe2" }).setOrigin(0.5);
-    applyBox.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.applyServerUrl());
-    this.serverApplyButton = { box: applyBox, text: applyText };
 
     const startBox = this.add.rectangle(width - 350, 526, 260, 42, 0x2c241a, 0.96).setOrigin(0).setStrokeStyle(2, 0x8f7750, 0.95);
     const startText = this.add.text(width - 220, 547, "Start Match", { fontSize: "19px", color: "#f4efe2" }).setOrigin(0.5);
@@ -245,7 +238,6 @@ export class MenuScene extends Phaser.Scene {
     this.nameInput = makeInput("Commander name", this.playerName);
     this.roomInput = makeInput("ABCDE", "");
     this.roomInput.maxLength = 5;
-    this.wsInput = makeInput("wss://your-server.example.com", this.serverUrl || "");
     this.roomInput.addEventListener("input", () => {
       this.roomInput.value = this.roomInput.value.toUpperCase();
     });
@@ -258,9 +250,6 @@ export class MenuScene extends Phaser.Scene {
       this.roomInput.style.left = `${width - 350}px`;
       this.roomInput.style.top = "242px";
       this.roomInput.style.width = "236px";
-      this.wsInput.style.left = `${width - 350}px`;
-      this.wsInput.style.top = "308px";
-      this.wsInput.style.width = "236px";
     };
 
     positionInputs();
@@ -271,7 +260,6 @@ export class MenuScene extends Phaser.Scene {
   destroyHtmlInputs() {
     this.nameInput?.remove();
     this.roomInput?.remove();
-    this.wsInput?.remove();
     if (this.htmlInputsPositioner) {
       this.scale.off("resize", this.htmlInputsPositioner);
     }
@@ -317,34 +305,26 @@ export class MenuScene extends Phaser.Scene {
   }
 
   resolveServerUrl() {
-    const query = new URLSearchParams(window.location.search).get("ws")?.trim() ?? "";
-    if (query) {
-      localStorage.setItem(WS_OVERRIDE_KEY, query);
-    }
-    const stored = localStorage.getItem(WS_OVERRIDE_KEY)?.trim() ?? "";
     const configured = (ENV.VITE_MULTIPLAYER_WS_URL ?? "").trim();
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const currentPort = window.location.port ? `:${window.location.port}` : "";
     const isVitePreview = ["5173", "4173"].includes(window.location.port);
     const fallbackPort = isVitePreview ? ":2567" : currentPort;
     const fallbackLocal = `${protocol}://${window.location.hostname || "localhost"}${fallbackPort}`;
-    const candidate = query || stored || configured || (this.isPublicSite ? "" : fallbackLocal);
+    const candidate = configured || (this.isPublicSite ? "" : fallbackLocal);
     if (this.isPublicSite && candidate && isLoopbackUrl(candidate)) {
       return "";
     }
     return candidate;
   }
 
-  normalizeWsUrl(raw) {
-    if (!raw) return "";
-    if (raw.startsWith("ws://") || raw.startsWith("wss://")) return raw;
-    const protocol = window.location.protocol === "https:" ? "wss://" : "ws://";
-    return `${protocol}${raw}`;
+  getServerStatusText() {
+    return this.serverUrl ? `Server: ${this.serverUrl}` : "Server: missing VITE_MULTIPLAYER_WS_URL";
   }
 
   validateServerUrl(url) {
     if (!url) {
-      return "Set server WS URL first.";
+      return this.isPublicSite ? "Build is missing VITE_MULTIPLAYER_WS_URL." : "Backend URL is not configured.";
     }
 
     let parsed;
@@ -366,31 +346,6 @@ export class MenuScene extends Phaser.Scene {
     return null;
   }
 
-  applyServerUrl() {
-    const value = this.normalizeWsUrl(this.wsInput?.value.trim() ?? "");
-    const error = this.validateServerUrl(value);
-    if (error) {
-      this.statusText.setText(error);
-      return;
-    }
-
-    this.serverUrl = value;
-    this.wsInput.value = this.serverUrl;
-    localStorage.setItem(WS_OVERRIDE_KEY, this.serverUrl);
-    this.serverUrlText.setText(`WS: ${this.serverUrl}`);
-
-    if (this.netClient) {
-      this.netClient.close();
-      this.netClient = null;
-      this.isLobbyHost = false;
-      this.setStartButtonEnabled(false);
-      this.lobbyPlayersText.setText("Players:\n-");
-      this.lobbyRoomText.setText("Room: none");
-    }
-
-    this.statusText.setText("Server URL saved.");
-  }
-
   async prepareNetwork() {
     if (this.netClient?.connected) {
       return this.netClient;
@@ -400,15 +355,11 @@ export class MenuScene extends Phaser.Scene {
       return this.connectionPromise;
     }
 
-    const nextServerUrl = this.normalizeWsUrl(this.wsInput?.value.trim() || this.serverUrl);
-    const validationError = this.validateServerUrl(nextServerUrl);
+    const validationError = this.validateServerUrl(this.serverUrl);
     if (validationError) {
       throw new Error(validationError);
     }
-    this.serverUrl = nextServerUrl;
-    this.wsInput.value = this.serverUrl;
-    this.serverUrlText.setText(`WS: ${this.serverUrl}`);
-    localStorage.setItem(WS_OVERRIDE_KEY, this.serverUrl);
+    this.serverUrlText.setText(this.getServerStatusText());
 
     this.statusText.setText(`Connecting to ${this.serverUrl} ...`);
 

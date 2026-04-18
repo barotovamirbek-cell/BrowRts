@@ -17,6 +17,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      VITE_PLAYFAB_TITLE_ID: ${{ vars.VITE_PLAYFAB_TITLE_ID }}
+      VITE_MULTIPLAYER_WS_URL: ${{ vars.VITE_MULTIPLAYER_WS_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,6 +32,10 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Validate public build config
+        run: |
+          test -n "$VITE_MULTIPLAYER_WS_URL" || (echo "Missing GitHub variable VITE_MULTIPLAYER_WS_URL" && exit 1)
 
       - name: Build
         run: npm run build

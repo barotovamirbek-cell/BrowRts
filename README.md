@@ -41,7 +41,7 @@ copy .env.example .env
 Then set:
 
 - `VITE_PLAYFAB_TITLE_ID` to your PlayFab title id
-- `VITE_MULTIPLAYER_WS_URL` if your WebSocket server is not local
+- `VITE_MULTIPLAYER_WS_URL` to the fixed multiplayer backend URL that should be built into the client
 
 Client only:
 
@@ -86,14 +86,31 @@ Default local server address:
 - client: `http://127.0.0.1:5173/`
 - WebSocket server: `ws://localhost:2567`
 
-On public deployments you can set server URL directly in menu:
+For public deployments the client no longer allows changing the backend URL in-game.
+Set `VITE_MULTIPLAYER_WS_URL` before `npm run build`.
 
-- field: `Server WS URL`
-- button: `Apply Server URL`
-- requirement on `https` site: use `wss://...` (not `ws://...`)
-- example: `wss://your-rts-server.onrender.com`
+Example:
 
-If the game client is opened from the same server that hosts the backend, the menu now auto-detects that server URL.
+```bash
+VITE_MULTIPLAYER_WS_URL=wss://rts-api.example.com npm run build
+```
+
+## GitHub Pages + VPS
+
+This repo is now set up for the correct public layout:
+
+- GitHub Pages serves the frontend
+- VPS serves only the backend
+- the client uses one fixed built-in `wss://...` backend URL
+- players cannot change the backend inside the game
+
+To make Pages builds work, set these GitHub repository variables:
+
+- `Settings -> Secrets and variables -> Actions -> Variables`
+- `VITE_MULTIPLAYER_WS_URL = wss://rts-api.example.com`
+- `VITE_PLAYFAB_TITLE_ID = your_playfab_title_id`
+
+The Pages workflow now fails fast if `VITE_MULTIPLAYER_WS_URL` is missing.
 
 ## VPS Deploy
 
@@ -109,7 +126,7 @@ Run the single lightweight server process:
 ```bash
 $env:HOST="0.0.0.0"
 $env:PORT="2567"
-$env:PUBLIC_WS_URL="ws://132.243.24.25:2567"
+$env:PUBLIC_WS_URL="wss://rts-api.example.com"
 npm start
 ```
 
@@ -120,16 +137,31 @@ What this process does:
 - stores rooms in memory only
 - uses very little CPU/RAM because it is not a dedicated game simulation server
 
-Then open:
-
-- `http://132.243.24.25:2567/` if you serve the client from the VPS directly
-- or set `ws://132.243.24.25:2567` in the in-game `Server WS URL` field if the client is hosted elsewhere
-
 Important:
 
-- if your frontend is on `https://...`, browsers will block plain `ws://...`; use `wss://...` behind a reverse proxy
+- if your frontend is on `https://...`, the built-in multiplayer URL must be `wss://...`
 - open TCP port `2567` in the VPS firewall/security group
 - for long-running hosting use PM2, systemd, or another process manager
+
+Example VPS production layout:
+
+- Caddy config template: `server/Caddyfile.example`
+- systemd service template: `server/browrts.service.example`
+
+Use them like this on the VPS:
+
+```bash
+cp /root/BrowRts/server/Caddyfile.example /etc/caddy/Caddyfile
+cp /root/BrowRts/server/browrts.service.example /etc/systemd/system/browrts.service
+```
+
+Then replace `rts-api.example.com` in both files with your real backend domain and run:
+
+```bash
+systemctl daemon-reload
+systemctl enable --now browrts
+systemctl restart caddy
+```
 
 ## Controls
 
@@ -153,7 +185,7 @@ Important:
 - multiplayer does not work on plain GitHub Pages by itself
 - multiplayer needs a separately running WebSocket server
 
-If you want online multiplayer on the public site, deploy `server/server.js` on a real Node host and point the client to that WebSocket URL.
+If you want online multiplayer on the public site, deploy `server/server.js` on a real Node host and build the client with `VITE_MULTIPLAYER_WS_URL=wss://your-backend-domain`.
 
 Cheap/free options for relay host:
 
@@ -161,7 +193,7 @@ Cheap/free options for relay host:
 - Railway
 - Fly.io
 
-After deploying, paste your `wss://...` endpoint into `Server WS URL` in menu.
+After deploying, rebuild and redeploy the client so the fixed `wss://...` backend URL is baked into the bundle.
 
 ## Black Screen / 404 Fix
 
