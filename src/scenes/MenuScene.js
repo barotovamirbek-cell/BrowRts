@@ -157,6 +157,7 @@ export class MenuScene extends Phaser.Scene {
       wordWrap: { width: 340 }
     });
     top += 100;
+    top = Math.min(top, this.scale.height - 292);
 
     this.buttons = {
       rename: this.createWideButton(left, top, 340, "Переименовать профиль", () => this.renameProfile()),
