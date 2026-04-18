@@ -475,7 +475,7 @@ export class MenuScene extends Phaser.Scene {
       `Комнатный код: ${this.lobbyState?.roomCode ?? "не создан"}`,
       `Команд в лобби: ${teams.length}`
     ].join("\n"));
-    this.setStartButtonEnabled(Boolean(this.lobbyState && this.isLobbyHost && active >= 2));
+    this.setStartButtonEnabled(Boolean(this.lobbyState && this.isLobbyHost));
   }
 
   setStartButtonEnabled(enabled) {
