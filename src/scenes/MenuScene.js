@@ -179,25 +179,27 @@ export class MenuScene extends Phaser.Scene {
   }
 
   createSlotsPanel() {
-    this.add.text(468, 362, "Состав игроков", {
+    this.slotsTitle = this.add.text(468, 362, "Состав игроков", {
       fontFamily: "Georgia",
       fontSize: "32px",
       color: "#f4dfb1"
     });
 
-    this.add.text(472, 400, "Слот", { fontSize: "14px", color: "#bca98a" });
-    this.add.text(554, 400, "Игрок", { fontSize: "14px", color: "#bca98a" });
-    this.add.text(844, 400, "Управление", { fontSize: "14px", color: "#bca98a" });
-    this.add.text(1042, 400, "Раса", { fontSize: "14px", color: "#bca98a" });
-    this.add.text(1220, 400, "Команда", { fontSize: "14px", color: "#bca98a" });
+    this.slotHeaders = {
+      slot: this.add.text(472, 400, "Слот", { fontSize: "14px", color: "#bca98a" }),
+      player: this.add.text(554, 400, "Игрок", { fontSize: "14px", color: "#bca98a" }),
+      control: this.add.text(844, 400, "Управление", { fontSize: "14px", color: "#bca98a" }),
+      faction: this.add.text(1042, 400, "Раса", { fontSize: "14px", color: "#bca98a" }),
+      team: this.add.text(1220, 400, "Команда", { fontSize: "14px", color: "#bca98a" })
+    };
 
     this.slotRows = [];
     for (let index = 0; index < 4; index += 1) {
       const y = 438 + index * 92;
       const bg = this.add.rectangle(468, y, this.scale.width - 512, 74, 0x19110d, 0.92).setOrigin(0).setStrokeStyle(1, 0x5d4932, 0.9);
       const slotLabel = this.add.text(486, y + 24, `#${index + 1}`, { fontSize: "24px", color: "#f4dfb1" });
-      const name = this.add.text(554, y + 16, "", { fontSize: "20px", color: "#efe3cb", wordWrap: { width: 250 } });
-      const state = this.add.text(554, y + 43, "", { fontSize: "13px", color: "#bca98a", wordWrap: { width: 260 } });
+      const name = this.add.text(554, y + 16, "", { fontSize: "20px", color: "#efe3cb", wordWrap: { width: 250 } }).setLineSpacing(-6);
+      const state = this.add.text(554, y + 43, "", { fontSize: "13px", color: "#bca98a", wordWrap: { width: 260 } }).setLineSpacing(-4);
       const controlButton = this.createMiniButton(828, y + 16, 170, "Управление", () => this.cycleSlotController(index));
       const factionButton = this.createMiniButton(1020, y + 16, 156, "Раса", () => this.cycleSlotFaction(index));
       const teamButton = this.createMiniButton(1202, y + 16, 156, "Команда", () => this.cycleSlotTeam(index));
@@ -217,8 +219,10 @@ export class MenuScene extends Phaser.Scene {
     const bg = this.add.rectangle(x, y, width, 42, 0x241a13, 0.96).setOrigin(0).setStrokeStyle(2, 0x8c7149, 0.95);
     const text = this.add.text(x + width / 2, y + 21, label, {
       fontSize: "18px",
-      color: "#f4efe2"
-    }).setOrigin(0.5);
+      color: "#f4efe2",
+      align: "center",
+      wordWrap: { width: width - 24, useAdvancedWrap: true }
+    }).setOrigin(0.5).setLineSpacing(-4);
     bg.setInteractive({ useHandCursor: true }).on("pointerdown", handler);
     return { bg, text };
   }
@@ -236,10 +240,64 @@ export class MenuScene extends Phaser.Scene {
     const bg = this.add.rectangle(x, y, width, 38, 0x241a13, 0.96).setOrigin(0).setStrokeStyle(1, 0x826845, 0.95);
     const text = this.add.text(x + width / 2, y + 19, label, {
       fontSize: "15px",
-      color: "#f4efe2"
-    }).setOrigin(0.5);
+      color: "#f4efe2",
+      align: "center",
+      wordWrap: { width: width - 18, useAdvancedWrap: true }
+    }).setOrigin(0.5).setLineSpacing(-4);
     bg.setInteractive({ useHandCursor: true }).on("pointerdown", handler);
     return { bg, text };
+  }
+
+  setButtonBounds(button, x, y, width, height) {
+    button.bg.setPosition(x, y).setSize(width, height).setDisplaySize(width, height);
+    if (button.bg.input?.hitArea?.setTo) {
+      button.bg.input.hitArea.setTo(0, 0, width, height);
+    }
+    button.text
+      .setPosition(x + width / 2, y + height / 2)
+      .setWordWrapWidth(width - 18, true);
+  }
+
+  layoutSlotsPanel(width) {
+    const panelLeft = 468;
+    const panelRight = width - 28;
+    const compact = width < 1420;
+    const veryCompact = width < 1260;
+    const controlWidth = veryCompact ? 142 : compact ? 154 : 170;
+    const factionWidth = veryCompact ? 130 : compact ? 142 : 156;
+    const teamWidth = veryCompact ? 120 : compact ? 132 : 156;
+    const gap = veryCompact ? 10 : 18;
+    const teamX = panelRight - teamWidth - 10;
+    const factionX = teamX - gap - factionWidth;
+    const controlX = factionX - gap - controlWidth;
+    const nameX = 554;
+    const nameWidth = Math.max(140, controlX - nameX - 20);
+    const rowWidth = Math.max(560, panelRight - panelLeft - 10);
+    const rowHeight = veryCompact ? 82 : 74;
+
+    this.slotsTitle.setFontSize(compact ? 28 : 32);
+    this.slotHeaders.slot.setPosition(472, 400).setFontSize(veryCompact ? 12 : 14);
+    this.slotHeaders.player.setPosition(554, 400).setFontSize(veryCompact ? 12 : 14);
+    this.slotHeaders.control.setPosition(controlX, 400).setFontSize(veryCompact ? 12 : 14);
+    this.slotHeaders.faction.setPosition(factionX, 400).setFontSize(veryCompact ? 12 : 14);
+    this.slotHeaders.team.setPosition(teamX, 400).setFontSize(veryCompact ? 12 : 14);
+
+    this.slotRows.forEach((row, index) => {
+      const y = 438 + index * 92;
+      row.bg.setPosition(panelLeft, y).setSize(rowWidth, rowHeight).setDisplaySize(rowWidth, rowHeight);
+      row.slotLabel.setPosition(486, y + (veryCompact ? 26 : 24)).setFontSize(veryCompact ? 20 : 24);
+      row.name
+        .setPosition(nameX, y + 14)
+        .setFontSize(veryCompact ? 15 : compact ? 17 : 20)
+        .setWordWrapWidth(nameWidth, true);
+      row.state
+        .setPosition(nameX, y + (veryCompact ? 46 : 43))
+        .setFontSize(veryCompact ? 11 : compact ? 12 : 13)
+        .setWordWrapWidth(nameWidth, true);
+      this.setButtonBounds(row.controlButton, controlX, y + 16, controlWidth, 38);
+      this.setButtonBounds(row.factionButton, factionX, y + 16, factionWidth, 38);
+      this.setButtonBounds(row.teamButton, teamX, y + 16, teamWidth, 38);
+    });
   }
 
   createHtmlInputs() {
@@ -297,16 +355,20 @@ export class MenuScene extends Phaser.Scene {
       const compact = width < 1360;
       this.titleText.setFontSize(width < 1200 ? 42 : 54);
       this.subtitleText.setFontSize(width < 1200 ? 16 : 18).setWordWrapWidth(Math.max(420, width - 120), true);
-      this.profileText.setWordWrapWidth(340, true);
-      this.serverText.setWordWrapWidth(340, true);
-      this.lobbySummary.setWordWrapWidth(340, true);
+      this.profileText.setFontSize(compact ? 16 : 17).setWordWrapWidth(340, true).setLineSpacing(-4);
+      this.serverText.setFontSize(compact ? 13 : 14).setWordWrapWidth(340, true).setLineSpacing(-4);
+      this.roomText.setFontSize(compact ? 20 : 24);
+      this.lobbySummary.setFontSize(compact ? 14 : 15).setWordWrapWidth(340, true).setLineSpacing(-4);
       this.statusText.setPosition(34, height - 42).setWordWrapWidth(width - 60, true).setFontSize(compact ? 16 : 18);
+      Object.values(this.buttons).forEach((button) => {
+        button.text.setFontSize(compact ? 16 : 18).setWordWrapWidth(316, true);
+      });
+      this.startMatchButton.text.setFontSize(compact ? 16 : 18).setWordWrapWidth(316, true);
+      this.layoutSlotsPanel(width);
       this.slotRows.forEach((row) => {
-        row.name.setFontSize(compact ? 17 : 20).setWordWrapWidth(compact ? 190 : 250, true);
-        row.state.setFontSize(compact ? 12 : 13).setWordWrapWidth(compact ? 210 : 260, true);
-        row.controlButton.text.setFontSize(compact ? 13 : 15);
-        row.factionButton.text.setFontSize(compact ? 13 : 15);
-        row.teamButton.text.setFontSize(compact ? 13 : 15);
+        row.controlButton.text.setFontSize(compact ? 12 : 15);
+        row.factionButton.text.setFontSize(compact ? 12 : 15);
+        row.teamButton.text.setFontSize(compact ? 12 : 15);
       });
     };
     this.scale.on("resize", this.handleMenuResize);
@@ -519,11 +581,11 @@ export class MenuScene extends Phaser.Scene {
 
       const faction = FACTION_DEFS[slot.faction] ?? FACTION_DEFS.kingdom;
       const editable = this.canEditSlot(index);
+      const stateLabel = slot.connected ? "в сети" : slot.controller === "bot" ? "автоигра" : "ожидание";
+      const roleLabel = slot.isHost ? "хост" : this.getSlotControllerLabel(slot.controller, slot, !this.lobbyState).toLowerCase();
       row.bg.setFillStyle(index % 2 === 0 ? 0x19110d : 0x17100d, 0.95).setStrokeStyle(1, faction.color, 0.65);
       row.name.setText(slot.name);
-      row.state.setText(
-        `${this.getSlotControllerLabel(slot.controller, slot, !this.lobbyState)} • ${slot.connected ? "в сети" : slot.controller === "bot" ? "автоигра" : "ожидание"}`
-      );
+      row.state.setText(`${roleLabel} • ${stateLabel}`);
       row.controlButton.text.setText(this.getSlotControllerLabel(slot.controller, slot, !this.lobbyState)).setColor(editable || index === 0 ? "#f4efe2" : "#8e8578");
       row.factionButton.text.setText(faction.name).setColor(editable ? faction.ui : "#8e8578");
       row.teamButton.text.setText(TEAM_LABELS[slot.team] ?? `Команда ${slot.team}`).setColor(editable ? "#f4efe2" : "#8e8578");

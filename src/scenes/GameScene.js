@@ -185,6 +185,7 @@ export class GameScene extends Phaser.Scene {
       snapshotSeen: false,
       matchStartedAt: this.time.now,
       cameraCentered: false,
+      lastBuildingAlertAt: 0,
       fog: null,
       lastFogDrawAt: 0
     };
@@ -658,10 +659,18 @@ export class GameScene extends Phaser.Scene {
       title: this.add.text(16, 12, "Железный Рубеж", { fontFamily: "Georgia", fontSize: "26px", color: faction.ui }).setScrollFactor(0),
       stats: this.add.text(186, 14, "", { fontSize: "18px", color: "#f4f2e8" }).setScrollFactor(0),
       status: this.add.text(width - 18, 15, "", { fontSize: "18px", color: "#f0c97a" }).setOrigin(1, 0).setScrollFactor(0),
+      alert: this.add.text(width / 2, 60, "", {
+        fontFamily: "Georgia",
+        fontSize: "20px",
+        color: "#ffd68b",
+        stroke: "#000000",
+        strokeThickness: 4,
+        align: "center"
+      }).setOrigin(0.5, 0).setScrollFactor(0),
       selection: this.add.text(20, height - 142, "", { fontSize: "20px", color: "#f4f2e8", wordWrap: { width: 320 } }).setScrollFactor(0),
       details: this.add.text(20, height - 98, "", { fontSize: "15px", color: "#bdb5a4", wordWrap: { width: 360 } }).setScrollFactor(0),
       roster: this.add.text(width - 20, 70, "", { fontSize: "15px", color: "#ddd3c8", align: "right" }).setOrigin(1, 0).setScrollFactor(0),
-      hint: this.add.text(width - 20, height - 136, "ЛКМ выделить  ПКМ приказ  QWE/ASD/ZXC команды  H к базе", {
+      hint: this.add.text(width - 20, height - 136, "ЛКМ выделить  ПКМ приказ\nQWE/ASD/ZXC команды  H к базе", {
         fontSize: "15px",
         color: "#bdb5a4",
         align: "right"
@@ -837,6 +846,7 @@ export class GameScene extends Phaser.Scene {
       this.ui.topAccent.setSize(width, 2);
       this.ui.bottomAccent.setPosition(0, height - 160).setSize(width, 2);
       this.ui.status.setPosition(width - 18, 15);
+      this.ui.alert.setPosition(width / 2, 60);
       this.ui.selection.setPosition(20, height - 142);
       this.ui.details.setPosition(20, height - 98);
       this.ui.roster.setPosition(width - 20, 70);
@@ -851,18 +861,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   applyResponsiveUiLayout(width, height) {
-    const compact = width < 1280;
+    const compact = width < 1360;
+    const tight = width < 1180;
     this.ui.title.setFontSize(compact ? 22 : 26);
-    this.ui.stats.setFontSize(compact ? 15 : 18).setWordWrapWidth(Math.max(260, width * 0.34), true);
-    this.ui.status.setFontSize(compact ? 15 : 18).setWordWrapWidth(Math.max(220, width * 0.28), true);
-    this.ui.selection.setFontSize(compact ? 18 : 20).setWordWrapWidth(Math.max(220, this.ui.infoPanel.width - 36), true);
-    this.ui.details.setFontSize(compact ? 14 : 15).setWordWrapWidth(Math.max(240, this.ui.infoPanel.width - 24), true);
-    this.ui.roster.setFontSize(compact ? 13 : 15).setWordWrapWidth(Math.max(160, width * 0.18), true);
-    this.ui.hint.setFontSize(compact ? 13 : 15).setWordWrapWidth(Math.max(180, width * 0.2), true);
+    this.ui.stats.setFontSize(tight ? 13 : compact ? 15 : 18).setWordWrapWidth(Math.max(240, width * 0.31), true);
+    this.ui.status.setFontSize(tight ? 13 : compact ? 15 : 18).setWordWrapWidth(Math.max(170, width * 0.17), true);
+    this.ui.alert.setFontSize(tight ? 17 : compact ? 18 : 20).setWordWrapWidth(Math.max(320, width * 0.38), true).setLineSpacing(-4);
+    this.ui.selection.setFontSize(compact ? 17 : 20).setWordWrapWidth(Math.max(220, this.ui.infoPanel.width - 36), true).setLineSpacing(-4);
+    this.ui.details.setFontSize(tight ? 12 : compact ? 13 : 15).setWordWrapWidth(Math.max(240, this.ui.infoPanel.width - 24), true).setLineSpacing(-4);
+    this.ui.roster.setFontSize(tight ? 11 : compact ? 12 : 15).setWordWrapWidth(Math.max(156, width * 0.16), true).setLineSpacing(-4);
+    this.ui.hint.setFontSize(tight ? 11 : compact ? 12 : 15).setWordWrapWidth(Math.max(170, width * 0.18), true).setLineSpacing(-4);
     this.ui.result.setWordWrapWidth(Math.max(320, width * 0.48), true);
-    this.ui.status.setPosition(width - 18, compact ? 12 : 15);
-    this.ui.roster.setPosition(width - 20, compact ? 64 : 70);
-    this.ui.hint.setPosition(width - 20, height - 136);
+    this.ui.status.setPosition(width - 18, tight ? 10 : compact ? 12 : 15);
+    this.ui.alert.setPosition(width / 2, tight ? 58 : 60);
+    this.ui.roster.setPosition(width - 20, compact ? 62 : 70);
+    this.ui.hint.setPosition(width - 20, height - (tight ? 144 : 136));
   }
 
   bindVisibilityRecovery() {
@@ -1996,6 +2009,7 @@ export class GameScene extends Phaser.Scene {
       ai.threatTargetId = attacker.id;
       ai.underAttackUntil = this.time.now + 18000;
     }
+    this.maybeWarnLocalBuildingUnderAttack(target, attacker);
     this.spawnHitEffect(target.x, target.y);
     this.tweens.add({
       targets: target.sprite,
@@ -2120,6 +2134,45 @@ export class GameScene extends Phaser.Scene {
     this.state.messageUntil = this.time.now + 2400;
   }
 
+  maybeWarnLocalBuildingUnderAttack(target, attacker = null) {
+    if (target.kind !== "building" || target.ownerId !== this.localPlayerId) {
+      return;
+    }
+    if (attacker?.ownerId && !this.isEnemyOwner(this.localPlayerId, attacker.ownerId)) {
+      return;
+    }
+
+    const now = this.time.now;
+    const lastTargetAlertAt = target.lastAlertAt ?? 0;
+    if (now - lastTargetAlertAt < 4200 || now - this.state.lastBuildingAlertAt < 2600) {
+      return;
+    }
+
+    target.lastAlertAt = now;
+    this.state.lastBuildingAlertAt = now;
+    this.showMessage(target.type === "townhall" ? "Тревога! База под ударом." : `Тревога! ${target.def.label} под ударом.`);
+    this.uiPulse.setFillStyle(0xbd3f3f, 0);
+    this.tweens.add({
+      targets: this.uiPulse,
+      alpha: 0.2,
+      duration: 120,
+      yoyo: true,
+      repeat: 1,
+      onComplete: () => this.uiPulse.setFillStyle(0xffffff, 0)
+    });
+  }
+
+  summarizeList(items, maxVisible = 3) {
+    if (items.length <= maxVisible) {
+      return items.join(", ");
+    }
+    return `${items.slice(0, maxVisible).join(", ")} +${items.length - maxVisible}`;
+  }
+
+  shortenLabel(label, max = 12) {
+    return label.length > max ? `${label.slice(0, max - 1)}…` : label;
+  }
+
   showPlayerMessage(playerId, message) {
     if (playerId === this.localPlayerId) {
       this.showMessage(message);
@@ -2147,13 +2200,20 @@ export class GameScene extends Phaser.Scene {
   updateUI(now) {
     const player = this.state.players[this.localPlayerId];
     if (!player) return;
+    const activeMessage = this.state.messageUntil > now ? this.state.message : "";
     this.ui.stats.setText(
       `Золото ${Math.floor(player.resources.gold)}   Дерево ${Math.floor(player.resources.wood)}   Лимит ${player.resources.supplyUsed}/${player.resources.supplyCap}`
     );
-    this.ui.status.setText(this.state.result ?? (this.state.messageUntil > now ? this.state.message : `${player.factionDef.name} готово к бою`));
+    this.ui.status.setText(this.state.result ?? `${player.factionDef.name}`);
+    this.ui.alert.setText(activeMessage);
     this.ui.roster.setText(
       this.roster
-        .map((entry) => `${entry.playerId === this.localPlayerId ? ">" : " "} ${FACTION_DEFS[entry.faction].name} • T${entry.team}${entry.isHuman ? "" : " • бот"}`)
+        .map((entry) => {
+          const side = entry.playerId === this.localPlayerId ? ">" : " ";
+          const name = this.shortenLabel(entry.name ?? (entry.isHuman ? "Игрок" : "Бот"), 10);
+          const faction = this.shortenLabel(FACTION_DEFS[entry.faction].name, 10);
+          return `${side} ${name} • ${faction} • К${entry.team}${entry.isHuman ? "" : " • бот"}`;
+        })
         .join("\n")
     );
 
@@ -2173,7 +2233,7 @@ export class GameScene extends Phaser.Scene {
       this.ui.details.setText(
         this.mode === "multiplayer" && !this.isHost && !this.state.snapshotSeen
           ? "Ожидание снапшота мира от хоста..."
-          : "Рабочие собирают ресурсы и строят. Казармы, кузница и зал героев дают армию."
+          : "Рабочие добывают ресурсы и строят. Казармы, кузница и зал героев открывают армию."
       );
     } else if (this.state.selected.length === 1) {
       const entity = this.state.selected[0];
@@ -2182,7 +2242,7 @@ export class GameScene extends Phaser.Scene {
       this.ui.details.setText(
         entity.kind === "building"
           ? entity.queue.length
-            ? `Очередь: ${entity.queue.map((entry) => this.getUnitLabel(entry.type, entity.ownerId)).join(", ")}`
+            ? `Очередь: ${this.summarizeList(entity.queue.map((entry) => this.getUnitLabel(entry.type, entity.ownerId)), 3)}`
             : entity.completed
               ? "Здание активно"
               : `Строительство ${Math.floor((entity.buildProgress / entity.def.buildTime) * 100)}%`
@@ -2193,9 +2253,10 @@ export class GameScene extends Phaser.Scene {
     } else {
       this.ui.selection.setText(`Выделено: ${this.state.selected.length}`);
       this.ui.details.setText(
-        this.state.selected
-          .map((entry) => (entry.kind === "unit" ? this.getUnitLabel(entry.type, entry.ownerId) : entry.def.label))
-          .join(", ")
+        this.summarizeList(
+          this.state.selected.map((entry) => (entry.kind === "unit" ? this.getUnitLabel(entry.type, entry.ownerId) : entry.def.label)),
+          4
+        )
       );
     }
 
