@@ -475,7 +475,8 @@ export class MenuScene extends Phaser.Scene {
       `Комнатный код: ${this.lobbyState?.roomCode ?? "не создан"}`,
       `Команд в лобби: ${teams.length}`
     ].join("\n"));
-    this.setStartButtonEnabled(Boolean(this.lobbyState && this.isLobbyHost));
+    const hasRoom = Boolean(this.lobbyState?.roomCode || this.roomInput?.value?.trim());
+    this.setStartButtonEnabled(Boolean(this.isLobbyHost && hasRoom));
   }
 
   setStartButtonEnabled(enabled) {
@@ -653,7 +654,7 @@ export class MenuScene extends Phaser.Scene {
       this.roomInput.value = message.roomCode;
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.statusText.setText(`Лобби ${message.roomCode} создано.`);
-      this.setStartButtonEnabled(false);
+      this.setStartButtonEnabled(true);
       this.refreshActionButtons();
     });
 
@@ -674,12 +675,12 @@ export class MenuScene extends Phaser.Scene {
         ...message,
         slots: normalizedSlots
       };
-      this.isLobbyHost = message.hostId === this.connectedPlayerId
+      const serverSaysHost = message.hostId === this.connectedPlayerId
         || Boolean(message.players?.find((player) => player.id === this.connectedPlayerId)?.isHost);
+      this.isLobbyHost = this.isLobbyHost || serverSaysHost;
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.refreshSlotRows();
       this.updateLobbySummary();
-      this.refreshActionButtons();
       this.refreshActionButtons();
       this.statusText.setText(
         this.isLobbyHost ? "Лобби готово. Настрой слоты и запускай матч." : "Ожидание старта матча от хоста."
