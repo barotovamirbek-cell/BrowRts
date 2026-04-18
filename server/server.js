@@ -58,6 +58,7 @@ function getPublicPlayers(room) {
 function announceLobby(room) {
   broadcast(room, "lobby_update", {
     roomCode: room.code,
+    hostId: room.hostId,
     players: getPublicPlayers(room),
     slots: room.slots?.map((slot) => ({
       slot: slot.slot,
@@ -278,7 +279,6 @@ wss.on("connection", (ws) => {
     }
 
     if (message.type === "create_room") {
-      slot.controller = "human";
       player.name = message.name || player.name;
       player.faction = message.faction || player.faction;
       player.team = Number(message.team) || 1;
@@ -313,6 +313,7 @@ wss.on("connection", (ws) => {
         return;
       }
 
+      slot.controller = "human";
       player.name = message.name || player.name;
       player.faction = message.faction || player.faction;
       player.team = Number(message.team) || slot.team || 2;

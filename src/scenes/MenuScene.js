@@ -427,7 +427,7 @@ export class MenuScene extends Phaser.Scene {
       `Комнатный код: ${this.lobbyState?.roomCode ?? "не создан"}`,
       `Команд в лобби: ${teams.length}`
     ].join("\n"));
-    this.setStartButtonEnabled((this.isLobbyHost && this.lobbyState ? active >= 2 : false) || (!this.lobbyState && active >= 2));
+    this.setStartButtonEnabled(Boolean(this.lobbyState && this.isLobbyHost && active >= 2));
   }
 
   setStartButtonEnabled(enabled) {
@@ -461,9 +461,9 @@ export class MenuScene extends Phaser.Scene {
       this.profileText.setText(
         this.playFabIdentity.enabled
           ? `Профиль: ${this.playerName}  |  PlayFab ${this.playFabIdentity.playFabId}`
-          : `Профиль: ${this.playerName}  |  локальный режим`
+          : `Профиль: ${this.playerName}  |  без PlayFab`
       );
-      this.statusText.setText(this.playFabIdentity.enabled ? "PlayFab подключён." : "Локальный профиль готов.");
+      this.statusText.setText(this.playFabIdentity.enabled ? "PlayFab подключён." : "Профиль готов. Сетевая игра доступна без PlayFab.");
       this.refreshSlotRows();
     } catch (error) {
       this.profileText.setText("Профиль: локальный игрок  |  вход PlayFab не удался");
@@ -485,7 +485,7 @@ export class MenuScene extends Phaser.Scene {
     if (!this.playFabIdentity?.enabled) {
       this.playerName = nextName;
       this.syncLocalPlayerSlot();
-      this.profileText.setText(`Профиль: ${this.playerName}  |  локальный режим`);
+      this.profileText.setText(`Профиль: ${this.playerName}  |  без PlayFab`);
       this.statusText.setText("Профиль переименован.");
       this.refreshSlotRows();
       return;
@@ -611,10 +611,8 @@ export class MenuScene extends Phaser.Scene {
       if (Array.isArray(message.slots)) {
         this.localSlots = message.slots.map((slot) => ({ ...slot }));
       }
-      if (Array.isArray(message.players)) {
-        const self = message.players.find((player) => player.id === this.connectedPlayerId);
-        this.isLobbyHost = Boolean(self?.isHost);
-      }
+      this.isLobbyHost = message.hostId === this.connectedPlayerId
+        || Boolean(message.players?.find((player) => player.id === this.connectedPlayerId)?.isHost);
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.refreshSlotRows();
       this.updateLobbySummary();
