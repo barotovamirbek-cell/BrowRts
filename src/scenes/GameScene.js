@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { BUILDING_DEFS, MAP_HEIGHT, MAP_WIDTH, RESOURCE_TYPES, UNIT_DEFS } from "../game/defs.js";
-import { FACTION_DEFS, FACTION_ORDER } from "../game/factions.js";
+import { FACTION_DEFS } from "../game/factions.js";
 import { clamp, distance, distanceSq, formatCost, makeSelectionRect, pointInRect } from "../game/utils.js";
 
 const SPAWNS = [
@@ -15,25 +15,37 @@ const FACTION_UNIT_VISUALS = {
     scale: 2.2,
     worker: [106, 107],
     swordsman: [107, 161],
-    archer: [178, 179]
+    archer: [178, 179],
+    knight: [161, 160],
+    hunter: [179, 178],
+    hero: [161, 178]
   },
   wildkin: {
     scale: 2.2,
     worker: [106, 107],
     swordsman: [161, 107],
-    archer: [178, 179]
+    archer: [178, 179],
+    knight: [107, 160],
+    hunter: [178, 179],
+    hero: [160, 179]
   },
   dusk: {
     scale: 2.2,
     worker: [106, 107],
     swordsman: [107, 161],
-    archer: [179, 178]
+    archer: [179, 178],
+    knight: [161, 160],
+    hunter: [179, 178],
+    hero: [160, 178]
   },
   ember: {
     scale: 2.2,
     worker: [106, 107],
     swordsman: [161, 107],
-    archer: [178, 179]
+    archer: [178, 179],
+    knight: [161, 160],
+    hunter: [178, 179],
+    hero: [160, 179]
   }
 };
 
@@ -48,7 +60,9 @@ const BUILDING_FRAME_OFFSETS = {
   townhall: 1,
   farm: 6,
   barracks: 4,
-  tower: 5
+  tower: 5,
+  forge: 7,
+  herohall: 3
 };
 
 const RESOURCE_VISUALS = {
@@ -92,32 +106,26 @@ export class GameScene extends Phaser.Scene {
       slot: entry.slot ?? index,
       isHuman: entry.isHuman ?? true,
       isHost: entry.isHost ?? false,
+      team: entry.team ?? (index === 0 ? 1 : 2),
       name: entry.name ?? entry.playerId
     }));
 
-    const usedFactions = new Set(entries.map((entry) => entry.faction));
-    let aiIndex = 1;
-    for (const faction of FACTION_ORDER) {
-      if (entries.length >= 4) {
-        break;
-      }
-      if (usedFactions.has(faction)) {
-        continue;
-      }
-      entries.push({
-        playerId: `ai-${aiIndex++}`,
-        faction,
-        slot: entries.length,
-        isHuman: false,
-        isHost: false,
-        name: `${FACTION_DEFS[faction].name} AI`
-      });
-    }
-
     if (!entries.some((entry) => entry.playerId === this.localPlayerId)) {
-      entries[0].playerId = this.localPlayerId;
-      entries[0].faction = selectedFaction;
-      entries[0].isHuman = true;
+      if (entries.length === 0) {
+        entries.push({
+          playerId: this.localPlayerId,
+          faction: selectedFaction,
+          slot: 0,
+          isHuman: true,
+          isHost: true,
+          team: 1,
+          name: "Игрок"
+        });
+      } else {
+        entries[0].playerId = this.localPlayerId;
+        entries[0].faction = selectedFaction;
+        entries[0].isHuman = true;
+      }
     }
 
     return entries.slice(0, 4);
@@ -137,6 +145,26 @@ export class GameScene extends Phaser.Scene {
   getBuildingFrame(buildingType, factionKey) {
     const base = FACTION_BUILDING_BASE[factionKey] ?? FACTION_BUILDING_BASE.kingdom;
     return base + (BUILDING_FRAME_OFFSETS[buildingType] ?? 0);
+  }
+
+  getUnitLabel(type, ownerId = this.localPlayerId) {
+    if (type === "hero") {
+      return this.state?.players?.[ownerId]?.factionDef?.heroName ?? this.state?.players?.[this.localPlayerId]?.factionDef?.heroName ?? UNIT_DEFS.hero.label;
+    }
+    return UNIT_DEFS[type]?.label ?? type;
+  }
+
+  isEnemyOwner(ownerA, ownerB) {
+    if (!ownerA || !ownerB || ownerA === ownerB) {
+      return false;
+    }
+    const teamA = this.state.players[ownerA]?.team ?? ownerA;
+    const teamB = this.state.players[ownerB]?.team ?? ownerB;
+    return teamA !== teamB;
+  }
+
+  isEnemyEntity(viewerId, entity) {
+    return Boolean(entity?.ownerId) && this.isEnemyOwner(viewerId, entity.ownerId);
   }
 
   create() {
@@ -170,7 +198,10 @@ export class GameScene extends Phaser.Scene {
       this.state.ai[entry.playerId] = {
         nextDecisionAt: Phaser.Math.Between(900, 2200),
         nextAttackAt: this.time.now + Phaser.Math.Between(90000, 125000),
-        attackWave: 0
+        attackWave: 0,
+        threatTargetId: null,
+        underAttackUntil: 0,
+        rallyAt: null
       };
     });
 
@@ -188,9 +219,9 @@ export class GameScene extends Phaser.Scene {
         this.time.delayedCall(180, () => this.broadcastSnapshot());
       }
       this.centerCameraOnLocalBase(true);
-      this.showMessage("Expand, train and break the rival factions.");
+      this.showMessage("Развивай базу, собирай армию и ломай вражеские укрепления.");
     } else {
-      this.showMessage("Waiting for host snapshots...");
+      this.showMessage("Ожидание состояния мира от хоста...");
     }
   }
 
@@ -210,7 +241,7 @@ export class GameScene extends Phaser.Scene {
       if (this.isHost) {
         return;
       }
-      this.applySnapshot(message);
+      this.applySnapshot(message.payload ?? message);
     });
 
     this.netClient.on("request_state", () => {
@@ -227,6 +258,15 @@ export class GameScene extends Phaser.Scene {
     if (!this.isHost) {
       this.time.delayedCall(120, () => {
         this.netClient?.send("request_state");
+      });
+      this.time.addEvent({
+        delay: 1400,
+        loop: true,
+        callback: () => {
+          if (!this.state.snapshotSeen && this.netClient?.connected) {
+            this.netClient.send("request_state");
+          }
+        }
       });
     }
   }
@@ -614,13 +654,13 @@ export class GameScene extends Phaser.Scene {
       minimapPanel: this.add.rectangle(width - 220, height - 156, 208, 152, 0x17120f, 0.84).setOrigin(0).setScrollFactor(0).setStrokeStyle(2, 0x5d513b, 0.9),
       topAccent: this.add.rectangle(0, 54, width, 2, faction.color, 0.85).setOrigin(0).setScrollFactor(0),
       bottomAccent: this.add.rectangle(0, height - 160, width, 2, faction.color, 0.85).setOrigin(0).setScrollFactor(0),
-      title: this.add.text(16, 12, "Ironfront", { fontFamily: "Georgia", fontSize: "26px", color: faction.ui }).setScrollFactor(0),
+      title: this.add.text(16, 12, "Железный Рубеж", { fontFamily: "Georgia", fontSize: "26px", color: faction.ui }).setScrollFactor(0),
       stats: this.add.text(186, 14, "", { fontSize: "18px", color: "#f4f2e8" }).setScrollFactor(0),
       status: this.add.text(width - 18, 15, "", { fontSize: "18px", color: "#f0c97a" }).setOrigin(1, 0).setScrollFactor(0),
       selection: this.add.text(20, height - 142, "", { fontSize: "20px", color: "#f4f2e8", wordWrap: { width: 320 } }).setScrollFactor(0),
       details: this.add.text(20, height - 98, "", { fontSize: "15px", color: "#bdb5a4", wordWrap: { width: 360 } }).setScrollFactor(0),
       roster: this.add.text(width - 20, 70, "", { fontSize: "15px", color: "#ddd3c8", align: "right" }).setOrigin(1, 0).setScrollFactor(0),
-      hint: this.add.text(width - 20, height - 136, "LMB select  RMB order  QWE/ASD/ZXC actions  H home", {
+      hint: this.add.text(width - 20, height - 136, "ЛКМ выделить  ПКМ приказ  QWE/ASD/ZXC команды  H к базе", {
         fontSize: "15px",
         color: "#bdb5a4",
         align: "right"
@@ -726,41 +766,58 @@ export class GameScene extends Phaser.Scene {
     const building = this.getSingleSelectedBuilding();
 
     if (this.state.buildMode !== null) {
-      actions.push({ key: "cancel", label: "Cancel", type: "cancel", value: null, costText: "" });
+      actions.push({ key: "cancel", label: "Отмена", type: "cancel", value: null, costText: "" });
     }
 
     if (hasWorker) {
-      actions.push({ key: "build-farm", label: "Farm", type: "build", value: "farm", costText: formatCost(BUILDING_DEFS.farm.cost) });
+      actions.push({ key: "build-farm", label: "Ферма", type: "build", value: "farm", costText: formatCost(BUILDING_DEFS.farm.cost) });
       actions.push({
         key: "build-barracks",
-        label: "Barracks",
+        label: "Казармы",
         type: "build",
         value: "barracks",
         costText: formatCost(BUILDING_DEFS.barracks.cost)
       });
-      actions.push({ key: "build-tower", label: "Tower", type: "build", value: "tower", costText: formatCost(BUILDING_DEFS.tower.cost) });
+      actions.push({ key: "build-tower", label: "Башня", type: "build", value: "tower", costText: formatCost(BUILDING_DEFS.tower.cost) });
+      actions.push({ key: "build-forge", label: "Кузница", type: "build", value: "forge", costText: formatCost(BUILDING_DEFS.forge.cost) });
+      actions.push({ key: "build-herohall", label: "Зал героев", type: "build", value: "herohall", costText: formatCost(BUILDING_DEFS.herohall.cost) });
     }
 
     if (building?.completed) {
       if (building.def.canTrain?.includes("worker")) {
-        actions.push({ key: "train-worker", label: "Worker", type: "train", value: "worker", costText: formatCost(UNIT_DEFS.worker.cost) });
+        actions.push({ key: "train-worker", label: "Рабочий", type: "train", value: "worker", costText: formatCost(UNIT_DEFS.worker.cost) });
       }
       if (building.def.canTrain?.includes("swordsman")) {
         actions.push({
           key: "train-swordsman",
-          label: "Swordsman",
+          label: "Мечник",
           type: "train",
           value: "swordsman",
           costText: formatCost(UNIT_DEFS.swordsman.cost)
         });
       }
       if (building.def.canTrain?.includes("archer")) {
-        actions.push({ key: "train-archer", label: "Archer", type: "train", value: "archer", costText: formatCost(UNIT_DEFS.archer.cost) });
+        actions.push({ key: "train-archer", label: "Лучник", type: "train", value: "archer", costText: formatCost(UNIT_DEFS.archer.cost) });
+      }
+      if (building.def.canTrain?.includes("knight")) {
+        actions.push({ key: "train-knight", label: "Рыцарь", type: "train", value: "knight", costText: formatCost(UNIT_DEFS.knight.cost) });
+      }
+      if (building.def.canTrain?.includes("hunter")) {
+        actions.push({ key: "train-hunter", label: "Следопыт", type: "train", value: "hunter", costText: formatCost(UNIT_DEFS.hunter.cost) });
+      }
+      if (building.def.canTrain?.includes("hero")) {
+        actions.push({
+          key: "train-hero",
+          label: this.getUnitLabel("hero", building.ownerId),
+          type: "train",
+          value: "hero",
+          costText: formatCost(UNIT_DEFS.hero.cost)
+        });
       }
     }
 
     if (hasUnits) {
-      actions.push({ key: "stop", label: "Stop", type: "stop", value: null, costText: "" });
+      actions.push({ key: "stop", label: "Стоп", type: "stop", value: null, costText: "" });
     }
 
     return actions.slice(0, 9);
@@ -1061,7 +1118,7 @@ export class GameScene extends Phaser.Scene {
     const hpBg = this.add.rectangle(x, y - def.size / 2 - 10, def.size, 6, 0x000000, 0.66);
     const hpFill = this.add.rectangle(x - def.size / 2, y - def.size / 2 - 10, def.size, 6, 0x6dd66d, 1).setOrigin(0, 0.5);
     const selection = this.add.rectangle(x, y, def.size + 10, def.size + 10).setStrokeStyle(2, 0xf4f1d0, 0.95).setVisible(false);
-    const label = this.add.text(x, y + def.size * 0.48, completed ? "" : "Building...", {
+    const label = this.add.text(x, y + def.size * 0.48, completed ? "" : "Строится...", {
       fontSize: "12px",
       color: "#f4efe2"
     }).setOrigin(0.5);
@@ -1231,7 +1288,7 @@ export class GameScene extends Phaser.Scene {
       if (target?.kind === "resource" && unit.type === "worker") {
         return { kind: "unit_command", unitIds: [unit.id], action: "gather", targetId: target.id };
       }
-      if (target?.ownerId && target.ownerId !== unit.ownerId) {
+      if (this.isEnemyEntity(unit.ownerId, target)) {
         return { kind: "unit_command", unitIds: [unit.id], action: "attack", targetId: target.id };
       }
       if (target?.kind === "building" && target.ownerId === unit.ownerId && unit.type === "worker" && unit.carry) {
@@ -1241,7 +1298,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.issueCommands(commands);
-    this.showCommandMarker(worldPoint.x, worldPoint.y, target?.ownerId && target.ownerId !== this.localPlayerId ? 0xd95959 : 0xf4f1d0);
+    this.showCommandMarker(worldPoint.x, worldPoint.y, this.isEnemyEntity(this.localPlayerId, target) ? 0xd95959 : 0xf4f1d0);
   }
 
   issueCommands(commands) {
@@ -1286,11 +1343,11 @@ export class GameScene extends Phaser.Scene {
         if (!def) return;
         const canPlace = this.canPlaceBuilding(command.buildingType, command.point.x, command.point.y);
         if (!canPlace.ok) {
-          this.showPlayerMessage(playerId, `Cannot build here: ${canPlace.reason}`);
+          this.showPlayerMessage(playerId, `Нельзя строить здесь: ${canPlace.reason}`);
           return;
         }
         if (!this.payCost(playerId, def.cost)) {
-          this.showPlayerMessage(playerId, "Not enough resources.");
+          this.showPlayerMessage(playerId, "Недостаточно ресурсов.");
           return;
         }
         const building = this.spawnBuilding(playerId, command.buildingType, command.point.x, command.point.y, false);
@@ -1305,7 +1362,7 @@ export class GameScene extends Phaser.Scene {
       if (command.kind === "train") {
         const building = this.state.buildings.find((entry) => entry.id === command.buildingId && entry.ownerId === playerId);
         if (!building) {
-          this.showPlayerMessage(playerId, "Select your production building first.");
+          this.showPlayerMessage(playerId, "Сначала выдели своё производящее здание.");
           return;
         }
         this.queueTraining(building, command.unitType, { silent: playerId !== this.localPlayerId });
@@ -1412,7 +1469,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   performAttack(attacker, target) {
-    const isRanged = attacker.kind === "building" || attacker.type === "archer";
+    const isRanged = attacker.kind === "building" || Boolean(attacker.def.projectileSpeed);
     if (!isRanged) {
       this.applyDamage(target, this.getDamage(attacker), attacker);
       return;
@@ -1537,7 +1594,7 @@ export class GameScene extends Phaser.Scene {
       }
       if (building.completed && building.type === "tower") {
         const target = [...this.state.units, ...this.state.buildings]
-          .filter((entry) => entry.ownerId !== building.ownerId && !entry.dead)
+          .filter((entry) => this.isEnemyEntity(building.ownerId, entry) && !entry.dead)
           .sort((a, b) => distanceSq(building, a) - distanceSq(building, b))[0];
         if (target && distance(building, target) <= building.def.range && now - building.lastAttackAt >= building.def.attackCooldown) {
           building.lastAttackAt = now;
@@ -1574,10 +1631,13 @@ export class GameScene extends Phaser.Scene {
       const townhall = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "townhall" && !entry.dead);
       const barracks = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "barracks" && !entry.dead);
       const farm = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "farm" && !entry.dead);
+      const forge = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "forge" && !entry.dead);
+      const herohall = this.state.buildings.find((entry) => entry.ownerId === player.playerId && entry.type === "herohall" && !entry.dead);
       if (!townhall) return;
 
       const workers = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type === "worker" && !entry.dead);
       const combatUnits = this.state.units.filter((entry) => entry.ownerId === player.playerId && entry.type !== "worker" && !entry.dead);
+      const hero = combatUnits.find((entry) => entry.type === "hero");
 
       workers.forEach((worker) => {
         if (worker.state === "idle") {
@@ -1599,6 +1659,14 @@ export class GameScene extends Phaser.Scene {
         const building = this.spawnBuilding(player.playerId, "barracks", townhall.x + 110, townhall.y + 110, false);
         workers[1].buildTarget = building;
         workers[1].state = "building";
+      } else if (!forge && workers[2] && elapsed > 70000 && this.payCost(player.playerId, BUILDING_DEFS.forge.cost)) {
+        const building = this.spawnBuilding(player.playerId, "forge", townhall.x - 126, townhall.y + 126, false);
+        workers[2].buildTarget = building;
+        workers[2].state = "building";
+      } else if (!herohall && workers[3] && elapsed > 90000 && this.payCost(player.playerId, BUILDING_DEFS.herohall.cost)) {
+        const building = this.spawnBuilding(player.playerId, "herohall", townhall.x - 120, townhall.y - 106, false);
+        workers[3].buildTarget = building;
+        workers[3].state = "building";
       }
 
       if (barracks?.completed) {
@@ -1609,13 +1677,36 @@ export class GameScene extends Phaser.Scene {
         }
       }
 
+      if (forge?.completed) {
+        const heavyCount = combatUnits.filter((entry) => entry.type === "knight").length;
+        if (elapsed > 120000 && heavyCount < Math.max(2, Math.floor(combatUnits.length / 3))) {
+          this.queueTraining(forge, "knight", { silent: true });
+        } else if (elapsed > 135000) {
+          this.queueTraining(forge, "hunter", { silent: true });
+        }
+      }
+
+      if (herohall?.completed && !hero && elapsed > 115000) {
+        this.queueTraining(herohall, "hero", { silent: true });
+      }
+
+      if (ai.threatTargetId && now < ai.underAttackUntil) {
+        const threat = this.getEntityById(ai.threatTargetId);
+        const defenders = combatUnits
+          .filter((entry) => entry.type === "swordsman" || entry.type === "archer" || entry.type === "knight" || entry.type === "hunter" || entry.type === "hero")
+          .slice(0, Math.min(10, combatUnits.length));
+        if (threat && !threat.dead) {
+          defenders.forEach((unit) => this.commandAttack(unit, threat));
+        }
+      }
+
       // No early all-in rush: first coordinated attack starts after economy phase.
       if (elapsed < 90000) {
         return;
       }
 
       if (now >= ai.nextAttackAt) {
-        const attackers = combatUnits.filter((entry) => entry.type === "swordsman" || entry.type === "archer");
+        const attackers = combatUnits.filter((entry) => entry.type !== "worker");
         const minWaveSize = elapsed < 210000 ? 6 : 9;
         if (attackers.length < minWaveSize) {
           ai.nextAttackAt = now + Phaser.Math.Between(7000, 11000);
@@ -1625,10 +1716,10 @@ export class GameScene extends Phaser.Scene {
         ai.attackWave += 1;
         ai.nextAttackAt = now + Phaser.Math.Between(22000, 32000);
         const target = [...this.state.units, ...this.state.buildings]
-          .filter((entry) => entry.ownerId !== player.playerId && !entry.dead)
+          .filter((entry) => this.isEnemyEntity(player.playerId, entry) && !entry.dead)
           .sort((a, b) => distanceSq(townhall ?? { x: 0, y: 0 }, a) - distanceSq(townhall ?? { x: 0, y: 0 }, b))[0];
         if (target) {
-          const waveSize = Math.min(attackers.length, minWaveSize + ai.attackWave * 2);
+          const waveSize = Math.min(attackers.length, minWaveSize + ai.attackWave * 2 + (hero ? 1 : 0));
           attackers.slice(0, waveSize).forEach((unit) => this.commandAttack(unit, target));
         }
       }
@@ -1638,9 +1729,9 @@ export class GameScene extends Phaser.Scene {
   autoAcquireTarget(unit) {
     if (unit.type === "worker") return;
     const target = [...this.state.units, ...this.state.buildings]
-      .filter((entry) => entry.ownerId !== unit.ownerId && !entry.dead)
+      .filter((entry) => this.isEnemyEntity(unit.ownerId, entry) && !entry.dead)
       .sort((a, b) => distanceSq(unit, a) - distanceSq(unit, b))[0];
-    if (target && distance(unit, target) <= 180) {
+    if (target && distance(unit, target) <= (unit.type === "hero" ? 320 : 230)) {
       this.commandAttack(unit, target);
     }
   }
@@ -1665,8 +1756,8 @@ export class GameScene extends Phaser.Scene {
 
   getDamage(entity) {
     if (entity.kind === "building") return entity.def.damage ?? 0;
-    if (entity.type === "swordsman") return entity.def.damage * entity.faction.modifiers.meleeDamage;
-    if (entity.type === "archer") return entity.def.damage * entity.faction.modifiers.rangedDamage;
+    if (["swordsman", "knight"].includes(entity.type)) return entity.def.damage * entity.faction.modifiers.meleeDamage;
+    if (["archer", "hunter", "hero"].includes(entity.type)) return entity.def.damage * entity.faction.modifiers.rangedDamage;
     return entity.def.damage;
   }
 
@@ -1682,7 +1773,7 @@ export class GameScene extends Phaser.Scene {
     if (def.type === "stop") {
       const unitIds = this.state.selected.filter((entry) => entry.kind === "unit").map((entry) => entry.id);
       if (unitIds.length === 0) {
-        this.showMessage("Select units first.");
+        this.showMessage("Сначала выдели юнитов.");
         return;
       }
       this.issueCommands([{ kind: "stop", unitIds }]);
@@ -1690,7 +1781,7 @@ export class GameScene extends Phaser.Scene {
     }
     if (def.type === "build") {
       if (!this.state.selected.some((entry) => entry.kind === "unit" && entry.type === "worker")) {
-        this.showMessage("Select at least one Worker to build.");
+        this.showMessage("Для строительства нужен хотя бы один рабочий.");
         return;
       }
       this.enterBuildMode(def.value);
@@ -1699,7 +1790,7 @@ export class GameScene extends Phaser.Scene {
     if (def.type === "train") {
       const building = this.getSingleSelectedBuilding();
       if (!building) {
-        this.showMessage("Select Town Hall or Barracks first.");
+        this.showMessage("Выдели производящее здание.");
         return;
       }
       this.issueCommands([{ kind: "train", buildingId: building.id, unitType: def.value }]);
@@ -1734,7 +1825,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.state.buildMode) return;
     const workers = this.state.selected.filter((entry) => entry.kind === "unit" && entry.type === "worker").map((entry) => entry.id);
     if (workers.length === 0) {
-      this.showMessage("Select Workers to place a building.");
+      this.showMessage("Выдели рабочих для строительства.");
       return;
     }
     this.issueCommands([{ kind: "place_building", buildingType: this.state.buildMode, workerIds: workers, point: worldPoint }]);
@@ -1744,9 +1835,9 @@ export class GameScene extends Phaser.Scene {
   canPlaceBuilding(type, x, y) {
     const size = BUILDING_DEFS[type].size;
     const padding = size / 2 + 20;
-    if (x < padding || y < padding || x > MAP_WIDTH - padding || y > MAP_HEIGHT - padding) return { ok: false, reason: "Edge blocked" };
-    if (this.state.buildings.some((entry) => distance(entry, { x, y }) < (entry.def.size + size) * 0.65)) return { ok: false, reason: "Area blocked" };
-    if (this.state.resourcesNodes.some((entry) => distance(entry, { x, y }) < entry.radius + size * 0.7)) return { ok: false, reason: "Near resources" };
+    if (x < padding || y < padding || x > MAP_WIDTH - padding || y > MAP_HEIGHT - padding) return { ok: false, reason: "Слишком близко к краю карты" };
+    if (this.state.buildings.some((entry) => distance(entry, { x, y }) < (entry.def.size + size) * 0.65)) return { ok: false, reason: "Площадка занята" };
+    if (this.state.resourcesNodes.some((entry) => distance(entry, { x, y }) < entry.radius + size * 0.7)) return { ok: false, reason: "Слишком близко к ресурсам" };
     return { ok: true };
   }
 
@@ -1755,24 +1846,34 @@ export class GameScene extends Phaser.Scene {
     const owner = this.state.players[building.ownerId];
     const def = UNIT_DEFS[type];
     if (!building.completed) {
-      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Building is still under construction.");
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Здание ещё строится.");
       return false;
     }
     if (!building.def.canTrain?.includes(type)) {
-      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("This building cannot train that unit.");
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Это здание не может обучать этот тип юнитов.");
+      return false;
+    }
+    if (
+      def.hero &&
+      (
+        this.state.units.some((entry) => entry.ownerId === building.ownerId && entry.type === type && !entry.dead) ||
+        this.state.buildings.some((entry) => entry.ownerId === building.ownerId && entry.queue.some((queueItem) => queueItem.type === type))
+      )
+    ) {
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Герой этого дома уже на поле или в очереди.");
       return false;
     }
     if (owner.resources.supplyUsed + def.cost.supply > owner.resources.supplyCap) {
-      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Need more supply. Build Farms.");
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Нужен лимит. Строй фермы.");
       return false;
     }
     if (!this.payCost(building.ownerId, def.cost)) {
-      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Not enough resources.");
+      if (!silent && building.ownerId === this.localPlayerId) this.showMessage("Недостаточно ресурсов.");
       return false;
     }
     building.queue.push({ type, remaining: def.trainTime });
     this.updateSupply(building.ownerId);
-    if (!silent && building.ownerId === this.localPlayerId) this.showMessage(`${def.label} queued.`);
+    if (!silent && building.ownerId === this.localPlayerId) this.showMessage(`${this.getUnitLabel(type, building.ownerId)} добавлен в очередь.`);
     return true;
   }
 
@@ -1810,9 +1911,14 @@ export class GameScene extends Phaser.Scene {
       .sort((a, b) => distanceSq(from, a) - distanceSq(from, b))[0];
   }
 
-  applyDamage(target, amount) {
+  applyDamage(target, amount, attacker = null) {
     if (target.dead) return;
     target.hp -= amount;
+    if (attacker?.ownerId && target.ownerId && this.state.ai[target.ownerId]) {
+      const ai = this.state.ai[target.ownerId];
+      ai.threatTargetId = attacker.id;
+      ai.underAttackUntil = this.time.now + 18000;
+    }
     this.spawnHitEffect(target.x, target.y);
     this.tweens.add({
       targets: target.sprite,
@@ -1895,9 +2001,9 @@ export class GameScene extends Phaser.Scene {
   checkEndConditions() {
     const livingTownHalls = this.state.buildings.filter((entry) => entry.type === "townhall" && !entry.dead);
     const localAlive = livingTownHalls.some((entry) => entry.ownerId === this.localPlayerId);
-    const hostileAlive = livingTownHalls.some((entry) => entry.ownerId !== this.localPlayerId);
-    if (!localAlive) this.state.result = "Defeat";
-    if (localAlive && !hostileAlive) this.state.result = "Victory";
+    const hostileAlive = livingTownHalls.some((entry) => this.isEnemyOwner(this.localPlayerId, entry.ownerId));
+    if (!localAlive) this.state.result = "Поражение";
+    if (localAlive && !hostileAlive) this.state.result = "Победа";
   }
 
   updateSelectionBox() {
@@ -1965,11 +2071,13 @@ export class GameScene extends Phaser.Scene {
     const player = this.state.players[this.localPlayerId];
     if (!player) return;
     this.ui.stats.setText(
-      `Gold ${Math.floor(player.resources.gold)}   Wood ${Math.floor(player.resources.wood)}   Supply ${player.resources.supplyUsed}/${player.resources.supplyCap}`
+      `Золото ${Math.floor(player.resources.gold)}   Дерево ${Math.floor(player.resources.wood)}   Лимит ${player.resources.supplyUsed}/${player.resources.supplyCap}`
     );
-    this.ui.status.setText(this.state.result ?? (this.state.messageUntil > now ? this.state.message : `${player.factionDef.name} ready`));
+    this.ui.status.setText(this.state.result ?? (this.state.messageUntil > now ? this.state.message : `${player.factionDef.name} готово к бою`));
     this.ui.roster.setText(
-      this.roster.map((entry) => `${entry.playerId === this.localPlayerId ? ">" : " "} ${FACTION_DEFS[entry.faction].name}${entry.isHuman ? "" : " AI"}`).join("\n")
+      this.roster
+        .map((entry) => `${entry.playerId === this.localPlayerId ? ">" : " "} ${FACTION_DEFS[entry.faction].name} • T${entry.team}${entry.isHuman ? "" : " • бот"}`)
+        .join("\n")
     );
 
     if (this.state.inspectedResource?.dead || this.state.inspectedResource?.amount <= 0) {
@@ -1978,31 +2086,40 @@ export class GameScene extends Phaser.Scene {
 
     if (this.state.selected.length === 0 && this.state.inspectedResource) {
       const node = this.state.inspectedResource;
-      const kindLabel = node.type === "gold" ? "Gold Mine" : "Forest";
+      const kindLabel = node.type === "gold" ? "Золотая жила" : "Лес";
       this.ui.selection.setText(`${kindLabel}  ${Math.max(0, Math.floor(node.amount))}/${Math.floor(node.maxAmount ?? node.amount)}`);
       this.ui.details.setText(
-        node.type === "gold" ? "Workers mine gold here and return it to Town Hall." : "Workers chop wood from this forest patch."
+        node.type === "gold" ? "Рабочие добывают здесь золото и везут его в ратушу." : "Рабочие рубят здесь древесину."
       );
     } else if (this.state.selected.length === 0) {
-      this.ui.selection.setText("No selection");
-      this.ui.details.setText(this.mode === "multiplayer" && !this.isHost && !this.state.snapshotSeen ? "Waiting for host world state..." : "Workers gather and build. Barracks train troops.");
+      this.ui.selection.setText("Ничего не выделено");
+      this.ui.details.setText(
+        this.mode === "multiplayer" && !this.isHost && !this.state.snapshotSeen
+          ? "Ожидание снапшота мира от хоста..."
+          : "Рабочие собирают ресурсы и строят. Казармы, кузница и зал героев дают армию."
+      );
     } else if (this.state.selected.length === 1) {
       const entity = this.state.selected[0];
-      this.ui.selection.setText(`${entity.def.label}  HP ${Math.max(0, Math.ceil(entity.hp))}/${entity.def.maxHp}`);
+      const title = entity.kind === "unit" ? this.getUnitLabel(entity.type, entity.ownerId) : entity.def.label;
+      this.ui.selection.setText(`${title}  HP ${Math.max(0, Math.ceil(entity.hp))}/${entity.def.maxHp}`);
       this.ui.details.setText(
         entity.kind === "building"
           ? entity.queue.length
-            ? `Queue: ${entity.queue.map((entry) => UNIT_DEFS[entry.type].label).join(", ")}`
+            ? `Очередь: ${entity.queue.map((entry) => this.getUnitLabel(entry.type, entity.ownerId)).join(", ")}`
             : entity.completed
-              ? "Structure operational"
-              : `Construction ${Math.floor((entity.buildProgress / entity.def.buildTime) * 100)}%`
+              ? "Здание активно"
+              : `Строительство ${Math.floor((entity.buildProgress / entity.def.buildTime) * 100)}%`
           : entity.carry
-            ? `Carrying ${Math.floor(entity.carry.amount)} ${entity.carry.type}`
-            : `DMG ${Math.floor(this.getDamage(entity))}  Range ${entity.def.range}  Speed ${Math.floor(this.getMoveSpeed(entity))}`
+            ? `Несёт ${Math.floor(entity.carry.amount)} ${RESOURCE_TYPES[entity.carry.type]?.label ?? entity.carry.type}`
+            : `Урон ${Math.floor(this.getDamage(entity))}  Дальность ${entity.def.range}  Скорость ${Math.floor(this.getMoveSpeed(entity))}`
       );
     } else {
-      this.ui.selection.setText(`${this.state.selected.length} selected`);
-      this.ui.details.setText(this.state.selected.map((entry) => entry.def.label).join(", "));
+      this.ui.selection.setText(`Выделено: ${this.state.selected.length}`);
+      this.ui.details.setText(
+        this.state.selected
+          .map((entry) => (entry.kind === "unit" ? this.getUnitLabel(entry.type, entry.ownerId) : entry.def.label))
+          .join(", ")
+      );
     }
 
     this.refreshButtons();
@@ -2100,7 +2217,7 @@ export class GameScene extends Phaser.Scene {
         players: Object.fromEntries(
           Object.entries(this.state.players).map(([id, entry]) => [
             id,
-            { resources: entry.resources, faction: entry.faction, name: entry.name, isHuman: entry.isHuman }
+            { resources: entry.resources, faction: entry.faction, name: entry.name, isHuman: entry.isHuman, team: entry.team }
           ])
         ),
         units: this.state.units.map((entry) => ({
@@ -2147,11 +2264,20 @@ export class GameScene extends Phaser.Scene {
     Object.entries(payload.players).forEach(([playerId, data]) => {
       if (this.state.players[playerId]) {
         this.state.players[playerId].resources = data.resources;
+        this.state.players[playerId].team = data.team ?? this.state.players[playerId].team;
+        this.state.players[playerId].name = data.name ?? this.state.players[playerId].name;
       }
     });
     this.syncSnapshotEntities(payload.resourcesNodes, "resource");
     this.syncSnapshotEntities(payload.buildings, "building");
     this.syncSnapshotEntities(payload.units, "unit");
+    const highestIncomingId = Math.max(
+      0,
+      ...(payload.resourcesNodes ?? []).map((entry) => entry.id),
+      ...(payload.buildings ?? []).map((entry) => entry.id),
+      ...(payload.units ?? []).map((entry) => entry.id)
+    );
+    this.state.nextId = Math.max(this.state.nextId, highestIncomingId + 1);
     this.centerCameraOnLocalBase();
   }
 

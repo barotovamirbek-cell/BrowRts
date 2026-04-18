@@ -28,8 +28,13 @@ export function makeSelectionRect(a, b) {
 }
 
 export function formatCost(cost = {}) {
+  const labels = {
+    gold: "золото",
+    wood: "дерево",
+    supply: "лимит"
+  };
   return Object.entries(cost)
     .filter(([, value]) => value > 0)
-    .map(([key, value]) => `${value} ${key}`)
+    .map(([key, value]) => `${value} ${labels[key] ?? key}`)
     .join(" / ");
 }

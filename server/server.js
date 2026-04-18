@@ -58,7 +58,17 @@ function getPublicPlayers(room) {
 function announceLobby(room) {
   broadcast(room, "lobby_update", {
     roomCode: room.code,
-    players: getPublicPlayers(room)
+    players: getPublicPlayers(room),
+    slots: room.slots?.map((slot) => ({
+      slot: slot.slot,
+      playerId: slot.playerId,
+      name: slot.name,
+      faction: slot.faction,
+      team: slot.team,
+      controller: slot.controller,
+      connected: Boolean(slot.playerId),
+      isHost: slot.playerId === room.hostId
+    })) ?? []
   });
 }
 
@@ -72,7 +82,41 @@ function createRoom(hostPlayer) {
     code,
     hostId: hostPlayer.id,
     players: [hostPlayer],
-    started: false
+    started: false,
+    slots: [
+      {
+        slot: 0,
+        playerId: hostPlayer.id,
+        name: hostPlayer.name,
+        faction: hostPlayer.faction,
+        team: Number(hostPlayer.team) || 1,
+        controller: "human"
+      },
+      {
+        slot: 1,
+        playerId: null,
+        name: "Открытый слот",
+        faction: "wildkin",
+        team: 2,
+        controller: "human"
+      },
+      {
+        slot: 2,
+        playerId: null,
+        name: "Бот Легион",
+        faction: "dusk",
+        team: 2,
+        controller: "bot"
+      },
+      {
+        slot: 3,
+        playerId: null,
+        name: "Бот Пламя",
+        faction: "ember",
+        team: 2,
+        controller: "bot"
+      }
+    ]
   };
 
   rooms.set(code, room);
@@ -88,6 +132,12 @@ function removePlayer(player) {
 
   const room = rooms.get(player.roomCode);
   room.players = room.players.filter((entry) => entry.id !== player.id);
+  room.slots?.forEach((slot) => {
+    if (slot.playerId === player.id) {
+      slot.playerId = null;
+      slot.name = slot.controller === "bot" ? slot.name : "Открытый слот";
+    }
+  });
 
   if (room.players.length === 0) {
     rooms.delete(room.code);
@@ -105,6 +155,43 @@ function removePlayer(player) {
   });
 
   announceLobby(room);
+}
+
+function applyRequestedSlots(room, slots = []) {
+  if (!Array.isArray(slots)) {
+    return;
+  }
+
+  slots.slice(0, 4).forEach((incoming, index) => {
+    const slot = room.slots[index];
+    if (!slot) {
+      return;
+    }
+
+    const requestedController = incoming.controller === "bot" ? "bot" : incoming.controller === "human" ? "human" : "open";
+    slot.controller = index === 0 ? "human" : requestedController;
+    slot.faction = incoming.faction || slot.faction;
+    slot.team = Number(incoming.team) || slot.team || 1;
+
+    if (slot.playerId) {
+      return;
+    }
+
+    slot.name =
+      slot.controller === "bot"
+        ? incoming.name || `Бот ${index + 1}`
+        : slot.controller === "human"
+          ? "Открытый слот"
+          : "Пустой слот";
+  });
+}
+
+function findJoinableSlot(room) {
+  return room.slots.find((slot) => slot.controller === "human" && !slot.playerId);
+}
+
+function countActiveSlots(room) {
+  return room.slots.filter((slot) => slot.controller === "bot" || (slot.controller === "human" && slot.playerId)).length;
 }
 
 async function serveFile(filePath, res) {
@@ -192,7 +279,12 @@ wss.on("connection", (ws) => {
     if (message.type === "create_room") {
       player.name = message.name || player.name;
       player.faction = message.faction || player.faction;
+      player.team = Number(message.team) || 1;
       const room = createRoom(player);
+      applyRequestedSlots(room, message.slots);
+      room.slots[0].name = player.name;
+      room.slots[0].faction = player.faction;
+      room.slots[0].team = player.team;
       send(ws, "room_created", { roomCode: room.code, playerId: player.id, slot: 0 });
       announceLobby(room);
       return;
@@ -213,11 +305,22 @@ wss.on("connection", (ws) => {
         return;
       }
 
+      const slot = findJoinableSlot(room);
+      if (!slot) {
+        send(ws, "error_message", { message: "Нет свободного слота игрока." });
+        return;
+      }
+
       player.name = message.name || player.name;
       player.faction = message.faction || player.faction;
+      player.team = Number(message.team) || slot.team || 2;
       player.roomCode = room.code;
-      player.slot = room.players.length;
+      player.slot = slot.slot;
       room.players.push(player);
+      slot.playerId = player.id;
+      slot.name = player.name;
+      slot.faction = player.faction;
+      slot.team = player.team;
       send(ws, "room_joined", { roomCode: room.code, playerId: player.id, slot: player.slot });
       announceLobby(room);
       return;
@@ -229,15 +332,67 @@ wss.on("connection", (ws) => {
 
     const room = rooms.get(player.roomCode);
 
+    if (message.type === "update_slot" && player.id === room.hostId) {
+      const slot = room.slots?.[Number(message.slot)];
+      if (!slot) {
+        return;
+      }
+      if (slot.playerId && slot.playerId !== room.hostId && message.patch?.controller && message.patch.controller !== slot.controller) {
+        announceLobby(room);
+        return;
+      }
+
+      if (slot.slot !== 0) {
+        const controller = message.patch?.controller;
+        if (controller === "bot" || controller === "human" || controller === "open") {
+          slot.controller = controller;
+          if (controller !== "human" && slot.playerId) {
+            slot.controller = "human";
+          }
+        }
+      }
+
+      if (message.patch?.faction) {
+        slot.faction = message.patch.faction;
+      }
+      if (message.patch?.team) {
+        slot.team = Number(message.patch.team) || slot.team;
+      }
+      if (typeof message.patch?.name === "string" && !slot.playerId) {
+        slot.name = message.patch.name.trim() || slot.name;
+      }
+
+      if (!slot.playerId) {
+        if (slot.controller === "bot") {
+          slot.name = message.patch?.name?.trim() || slot.name || `Бот ${slot.slot + 1}`;
+        } else if (slot.controller === "human") {
+          slot.name = "Открытый слот";
+        } else {
+          slot.name = "Пустой слот";
+        }
+      }
+
+      announceLobby(room);
+      return;
+    }
+
     if (message.type === "start_match" && player.id === room.hostId) {
+      if (countActiveSlots(room) < 2) {
+        send(ws, "error_message", { message: "Нужно минимум два активных слота." });
+        return;
+      }
       room.started = true;
-      const slots = room.players.map((entry) => ({
-        playerId: entry.id,
-        name: entry.name,
-        faction: entry.faction,
-        slot: entry.slot,
-        isHost: entry.id === room.hostId
-      }));
+      const slots = room.slots
+        .filter((entry) => entry.controller === "bot" || (entry.controller === "human" && entry.playerId))
+        .map((entry) => ({
+          playerId: entry.playerId || `bot-${room.code}-${entry.slot}`,
+          name: entry.name,
+          faction: entry.faction,
+          slot: entry.slot,
+          team: entry.team,
+          isHost: entry.playerId === room.hostId,
+          isHuman: entry.controller === "human"
+        }));
       broadcast(room, "match_started", {
         roomCode: room.code,
         hostId: room.hostId,
@@ -268,9 +423,10 @@ wss.on("connection", (ws) => {
     }
 
     if (message.type === "state" && player.id === room.hostId) {
+      const payload = message.payload ?? Object.fromEntries(Object.entries(message).filter(([key]) => key !== "type"));
       room.players.forEach((entry) => {
         if (entry.id !== player.id) {
-          send(entry.ws, "state", message.payload ?? {});
+          send(entry.ws, "state", payload);
         }
       });
     }
