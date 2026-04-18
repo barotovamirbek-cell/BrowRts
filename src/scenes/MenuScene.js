@@ -278,7 +278,7 @@ export class MenuScene extends Phaser.Scene {
   buildDefaultSlots() {
     return [
       { slot: 0, controller: "human", faction: "kingdom", team: 1, name: this.playerName, connected: true, playerId: "local-player", isHost: true },
-      { slot: 1, controller: "bot", faction: "wildkin", team: 2, name: makeBotName("wildkin"), connected: false, playerId: null, isHost: false },
+      { slot: 1, controller: "human", faction: "wildkin", team: 2, name: "Открытый слот", connected: false, playerId: null, isHost: false },
       { slot: 2, controller: "bot", faction: "dusk", team: 2, name: makeBotName("dusk"), connected: false, playerId: null, isHost: false },
       { slot: 3, controller: "open", faction: "ember", team: 2, name: "Пустой слот", connected: false, playerId: null, isHost: false }
     ];
@@ -590,6 +590,7 @@ export class MenuScene extends Phaser.Scene {
 
     client.on("room_created", (message) => {
       this.isLobbyHost = true;
+      this.connectedPlayerId = message.playerId ?? this.connectedPlayerId;
       this.roomInput.value = message.roomCode;
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.statusText.setText(`Лобби ${message.roomCode} создано.`);
@@ -598,6 +599,7 @@ export class MenuScene extends Phaser.Scene {
 
     client.on("room_joined", (message) => {
       this.isLobbyHost = false;
+      this.connectedPlayerId = message.playerId ?? this.connectedPlayerId;
       this.roomInput.value = message.roomCode;
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.statusText.setText(`Подключение к комнате ${message.roomCode} выполнено.`);
@@ -606,8 +608,12 @@ export class MenuScene extends Phaser.Scene {
 
     client.on("lobby_update", (message) => {
       this.lobbyState = message;
-      if (Array.isArray(message.slots) && this.isLobbyHost) {
+      if (Array.isArray(message.slots)) {
         this.localSlots = message.slots.map((slot) => ({ ...slot }));
+      }
+      if (Array.isArray(message.players)) {
+        const self = message.players.find((player) => player.id === this.connectedPlayerId);
+        this.isLobbyHost = Boolean(self?.isHost);
       }
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.refreshSlotRows();

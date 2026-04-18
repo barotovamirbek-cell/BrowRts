@@ -187,7 +187,8 @@ function applyRequestedSlots(room, slots = []) {
 }
 
 function findJoinableSlot(room) {
-  return room.slots.find((slot) => slot.controller === "human" && !slot.playerId);
+  return room.slots.find((slot) => slot.controller === "human" && !slot.playerId) ??
+    room.slots.find((slot) => slot.controller === "open" && !slot.playerId);
 }
 
 function countActiveSlots(room) {
@@ -277,6 +278,7 @@ wss.on("connection", (ws) => {
     }
 
     if (message.type === "create_room") {
+      slot.controller = "human";
       player.name = message.name || player.name;
       player.faction = message.faction || player.faction;
       player.team = Number(message.team) || 1;
