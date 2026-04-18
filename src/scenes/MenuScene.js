@@ -53,6 +53,8 @@ export class MenuScene extends Phaser.Scene {
     this.createHtmlInputs();
     this.events.once("shutdown", () => this.destroyHtmlInputs());
     this.events.once("destroy", () => this.destroyHtmlInputs());
+    this.bindMenuResize();
+    this.bindVisibilityRecovery();
 
     this.syncLocalPlayerSlot();
     this.refreshFactionCards();
@@ -286,6 +288,68 @@ export class MenuScene extends Phaser.Scene {
     if (this.htmlInputsPositioner) {
       this.scale.off("resize", this.htmlInputsPositioner);
     }
+  }
+
+  bindMenuResize() {
+    this.handleMenuResize = (gameSize) => {
+      const width = gameSize.width;
+      const height = gameSize.height;
+      const compact = width < 1360;
+      this.titleText.setFontSize(width < 1200 ? 42 : 54);
+      this.subtitleText.setFontSize(width < 1200 ? 16 : 18).setWordWrapWidth(Math.max(420, width - 120), true);
+      this.profileText.setWordWrapWidth(340, true);
+      this.serverText.setWordWrapWidth(340, true);
+      this.lobbySummary.setWordWrapWidth(340, true);
+      this.statusText.setPosition(34, height - 42).setWordWrapWidth(width - 60, true).setFontSize(compact ? 16 : 18);
+      this.slotRows.forEach((row) => {
+        row.name.setFontSize(compact ? 17 : 20).setWordWrapWidth(compact ? 190 : 250, true);
+        row.state.setFontSize(compact ? 12 : 13).setWordWrapWidth(compact ? 210 : 260, true);
+        row.controlButton.text.setFontSize(compact ? 13 : 15);
+        row.factionButton.text.setFontSize(compact ? 13 : 15);
+        row.teamButton.text.setFontSize(compact ? 13 : 15);
+      });
+    };
+    this.scale.on("resize", this.handleMenuResize);
+    this.handleMenuResize(this.scale.gameSize);
+    this.events.once("shutdown", () => {
+      if (this.handleMenuResize) {
+        this.scale.off("resize", this.handleMenuResize);
+        this.handleMenuResize = null;
+      }
+    });
+  }
+
+  bindVisibilityRecovery() {
+    this.handleMenuVisibilityChange = () => this.resetMenuInputState();
+    this.handleMenuWindowBlur = () => this.resetMenuInputState();
+    this.handleMenuWindowFocus = () => this.resetMenuInputState();
+    document.addEventListener("visibilitychange", this.handleMenuVisibilityChange);
+    window.addEventListener("blur", this.handleMenuWindowBlur);
+    window.addEventListener("focus", this.handleMenuWindowFocus);
+    this.events.once("shutdown", () => this.unbindVisibilityRecovery());
+    this.events.once("destroy", () => this.unbindVisibilityRecovery());
+  }
+
+  unbindVisibilityRecovery() {
+    if (this.handleMenuVisibilityChange) {
+      document.removeEventListener("visibilitychange", this.handleMenuVisibilityChange);
+      this.handleMenuVisibilityChange = null;
+    }
+    if (this.handleMenuWindowBlur) {
+      window.removeEventListener("blur", this.handleMenuWindowBlur);
+      this.handleMenuWindowBlur = null;
+    }
+    if (this.handleMenuWindowFocus) {
+      window.removeEventListener("focus", this.handleMenuWindowFocus);
+      this.handleMenuWindowFocus = null;
+    }
+  }
+
+  resetMenuInputState() {
+    this.input?.keyboard?.resetKeys?.();
+    const pointers = this.input?.manager?.pointers ?? [];
+    pointers.forEach((pointer) => pointer?.reset?.());
+    this.input?.activePointer?.reset?.();
   }
 
   buildDefaultSlots() {

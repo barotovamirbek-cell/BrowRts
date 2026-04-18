@@ -210,6 +210,7 @@ export class GameScene extends Phaser.Scene {
     this.createUI();
     this.setupInput();
     this.bindResize();
+    this.bindVisibilityRecovery();
     this.setupNetworking();
     this.createScreenPulse();
 
@@ -843,8 +844,84 @@ export class GameScene extends Phaser.Scene {
       this.ui.minimapFrame.setPosition(width - 208, height - 146);
       this.ui.minimapHitbox.setPosition(width - 208, height - 146);
       this.ui.result.setPosition(width / 2, 80);
+      this.applyResponsiveUiLayout(width, height);
       this.layoutCommandButtons();
     });
+    this.applyResponsiveUiLayout(this.scale.width, this.scale.height);
+  }
+
+  applyResponsiveUiLayout(width, height) {
+    const compact = width < 1280;
+    this.ui.title.setFontSize(compact ? 22 : 26);
+    this.ui.stats.setFontSize(compact ? 15 : 18).setWordWrapWidth(Math.max(260, width * 0.34), true);
+    this.ui.status.setFontSize(compact ? 15 : 18).setWordWrapWidth(Math.max(220, width * 0.28), true);
+    this.ui.selection.setFontSize(compact ? 18 : 20).setWordWrapWidth(Math.max(220, this.ui.infoPanel.width - 36), true);
+    this.ui.details.setFontSize(compact ? 14 : 15).setWordWrapWidth(Math.max(240, this.ui.infoPanel.width - 24), true);
+    this.ui.roster.setFontSize(compact ? 13 : 15).setWordWrapWidth(Math.max(160, width * 0.18), true);
+    this.ui.hint.setFontSize(compact ? 13 : 15).setWordWrapWidth(Math.max(180, width * 0.2), true);
+    this.ui.result.setWordWrapWidth(Math.max(320, width * 0.48), true);
+    this.ui.status.setPosition(width - 18, compact ? 12 : 15);
+    this.ui.roster.setPosition(width - 20, compact ? 64 : 70);
+    this.ui.hint.setPosition(width - 20, height - 136);
+  }
+
+  bindVisibilityRecovery() {
+    this.handleVisibilityChange = () => {
+      const hidden = document.hidden;
+      this.resetTransientInputState();
+      if (hidden) {
+        if (this.mode === "multiplayer" && this.isHost) {
+          this.showMessage("Хост во вкладке в фоне: браузер замедляет симуляцию.");
+        }
+        return;
+      }
+
+      if (this.mode === "multiplayer") {
+        if (this.isHost) {
+          this.broadcastSnapshot();
+        } else {
+          this.netClient?.send("request_state");
+        }
+      }
+      this.showMessage("Управление восстановлено.");
+    };
+
+    this.handleWindowBlur = () => this.resetTransientInputState();
+    this.handleWindowFocus = () => this.handleVisibilityChange();
+
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    window.addEventListener("blur", this.handleWindowBlur);
+    window.addEventListener("focus", this.handleWindowFocus);
+    this.events.once("shutdown", () => this.unbindVisibilityRecovery());
+    this.events.once("destroy", () => this.unbindVisibilityRecovery());
+  }
+
+  unbindVisibilityRecovery() {
+    if (this.handleVisibilityChange) {
+      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+      this.handleVisibilityChange = null;
+    }
+    if (this.handleWindowBlur) {
+      window.removeEventListener("blur", this.handleWindowBlur);
+      this.handleWindowBlur = null;
+    }
+    if (this.handleWindowFocus) {
+      window.removeEventListener("focus", this.handleWindowFocus);
+      this.handleWindowFocus = null;
+    }
+  }
+
+  resetTransientInputState() {
+    if (this.dragSelect) {
+      this.dragSelect.active = false;
+      this.dragSelect.button = null;
+      this.dragSelect.pointerId = null;
+    }
+    this.selectionGraphics?.clear();
+    this.input?.keyboard?.resetKeys?.();
+    const pointers = this.input?.manager?.pointers ?? [];
+    pointers.forEach((pointer) => pointer?.reset?.());
+    this.input?.activePointer?.reset?.();
   }
 
   isPointerOverMinimap(pointer) {
