@@ -166,9 +166,11 @@ export class MenuScene extends Phaser.Scene {
     };
 
     this.startMatchButton = this.createWideButton(left, top + 236, 340, "Старт матча", () => {
-      if (this.isLobbyHost && this.netClient?.connected) {
-        this.netClient.send("start_match");
+      if (!this.netClient?.connected) {
+        this.statusText.setText("Нет соединения с сервером.");
+        return;
       }
+      this.netClient.send("start_match");
     });
     this.setStartButtonEnabled(false);
   }
@@ -483,8 +485,8 @@ export class MenuScene extends Phaser.Scene {
     this.startMatchButton.bg.setFillStyle(enabled ? 0x3a2c1c : 0x201812, 0.96);
     this.startMatchButton.text.setColor(enabled ? "#fff0cf" : "#8f8474");
     if (this.startMatchButton.bg.input) {
-      this.startMatchButton.bg.input.enabled = enabled;
-      this.startMatchButton.bg.input.cursor = enabled ? "pointer" : "default";
+      this.startMatchButton.bg.input.enabled = true;
+      this.startMatchButton.bg.input.cursor = "pointer";
     }
   }
 
