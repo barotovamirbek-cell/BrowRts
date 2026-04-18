@@ -58,6 +58,7 @@ export class MenuScene extends Phaser.Scene {
     this.refreshFactionCards();
     this.refreshSlotRows();
     this.updateLobbySummary();
+    this.refreshActionButtons();
     this.initializeIdentity();
   }
 
@@ -217,6 +218,15 @@ export class MenuScene extends Phaser.Scene {
     return { bg, text };
   }
 
+  setWideButtonEnabled(button, enabled) {
+    button.bg.setFillStyle(enabled ? 0x241a13 : 0x171210, 0.96);
+    button.text.setColor(enabled ? "#f4efe2" : "#8c8374");
+    if (button.bg.input) {
+      button.bg.input.enabled = enabled;
+      button.bg.input.cursor = enabled ? "pointer" : "default";
+    }
+  }
+
   createMiniButton(x, y, width, label, handler) {
     const bg = this.add.rectangle(x, y, width, 38, 0x241a13, 0.96).setOrigin(0).setStrokeStyle(1, 0x826845, 0.95);
     const text = this.add.text(x + width / 2, y + 19, label, {
@@ -289,6 +299,44 @@ export class MenuScene extends Phaser.Scene {
     this.localSlots[0].faction = this.selectedFaction;
     this.localSlots[0].controller = "human";
     this.localSlots[0].connected = true;
+  }
+
+  normalizeLobbySlots(message) {
+    if (Array.isArray(message.slots) && message.slots.length) {
+      return message.slots.map((slot, index) => ({
+        slot: slot.slot ?? index,
+        controller: slot.controller ?? (slot.playerId ? "human" : "open"),
+        faction: slot.faction ?? this.localSlots[index]?.faction ?? "kingdom",
+        team: slot.team ?? this.localSlots[index]?.team ?? (index === 0 ? 1 : 2),
+        name: slot.name ?? this.localSlots[index]?.name ?? "Слот",
+        connected: slot.connected ?? Boolean(slot.playerId),
+        playerId: slot.playerId ?? null,
+        isHost: Boolean(slot.isHost)
+      }));
+    }
+
+    const fallback = this.localSlots.map((slot) => ({
+      ...slot,
+      connected: false,
+      playerId: null,
+      isHost: false
+    }));
+
+    (message.players ?? []).forEach((player, index) => {
+      const slotIndex = player.slot ?? index;
+      const base = fallback[slotIndex] ?? fallback[index];
+      if (!base) {
+        return;
+      }
+      base.controller = "human";
+      base.connected = true;
+      base.playerId = player.id;
+      base.name = player.name;
+      base.faction = player.faction ?? base.faction;
+      base.isHost = Boolean(player.isHost);
+    });
+
+    return fallback;
   }
 
   getDisplayedSlots() {
@@ -433,6 +481,17 @@ export class MenuScene extends Phaser.Scene {
   setStartButtonEnabled(enabled) {
     this.startMatchButton.bg.setFillStyle(enabled ? 0x3a2c1c : 0x201812, 0.96);
     this.startMatchButton.text.setColor(enabled ? "#fff0cf" : "#8f8474");
+    if (this.startMatchButton.bg.input) {
+      this.startMatchButton.bg.input.enabled = enabled;
+      this.startMatchButton.bg.input.cursor = enabled ? "pointer" : "default";
+    }
+  }
+
+  refreshActionButtons() {
+    const inLobby = Boolean(this.lobbyState);
+    this.setWideButtonEnabled(this.buttons.skirmish, !inLobby);
+    this.setWideButtonEnabled(this.buttons.host, !inLobby);
+    this.setWideButtonEnabled(this.buttons.join, !inLobby);
   }
 
   selectFaction(factionKey) {
@@ -466,8 +525,8 @@ export class MenuScene extends Phaser.Scene {
       this.statusText.setText(this.playFabIdentity.enabled ? "PlayFab подключён." : "Профиль готов. Сетевая игра доступна без PlayFab.");
       this.refreshSlotRows();
     } catch (error) {
-      this.profileText.setText("Профиль: локальный игрок  |  вход PlayFab не удался");
-      this.statusText.setText("PlayFab недоступен, продолжаем локально.");
+      this.profileText.setText("Профиль: игрок  |  вход PlayFab не удался");
+      this.statusText.setText("PlayFab недоступен. Сетевая игра всё равно может работать.");
       console.error(error);
     }
   }
@@ -595,6 +654,7 @@ export class MenuScene extends Phaser.Scene {
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.statusText.setText(`Лобби ${message.roomCode} создано.`);
       this.setStartButtonEnabled(false);
+      this.refreshActionButtons();
     });
 
     client.on("room_joined", (message) => {
@@ -604,18 +664,23 @@ export class MenuScene extends Phaser.Scene {
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.statusText.setText(`Подключение к комнате ${message.roomCode} выполнено.`);
       this.setStartButtonEnabled(false);
+      this.refreshActionButtons();
     });
 
     client.on("lobby_update", (message) => {
-      this.lobbyState = message;
-      if (Array.isArray(message.slots)) {
-        this.localSlots = message.slots.map((slot) => ({ ...slot }));
-      }
+      const normalizedSlots = this.normalizeLobbySlots(message);
+      this.localSlots = normalizedSlots.map((slot) => ({ ...slot }));
+      this.lobbyState = {
+        ...message,
+        slots: normalizedSlots
+      };
       this.isLobbyHost = message.hostId === this.connectedPlayerId
         || Boolean(message.players?.find((player) => player.id === this.connectedPlayerId)?.isHost);
       this.roomText.setText(`Комната: ${message.roomCode}`);
       this.refreshSlotRows();
       this.updateLobbySummary();
+      this.refreshActionButtons();
+      this.refreshActionButtons();
       this.statusText.setText(
         this.isLobbyHost ? "Лобби готово. Настрой слоты и запускай матч." : "Ожидание старта матча от хоста."
       );
@@ -637,6 +702,7 @@ export class MenuScene extends Phaser.Scene {
       this.netClient = null;
       this.lobbyState = null;
       this.isLobbyHost = false;
+      this.refreshActionButtons();
       this.roomText.setText("Комната: локальная схватка");
       this.statusText.setText("Соединение с сервером разорвано.");
       this.refreshSlotRows();
@@ -698,6 +764,10 @@ export class MenuScene extends Phaser.Scene {
   }
 
   startSingleplayer() {
+    if (this.lobbyState) {
+      this.statusText.setText("Сначала выйди из сетевого лобби или дождись старта матча хостом.");
+      return;
+    }
     this.playerName = this.nameInput?.value.trim() || this.playerName;
     this.syncLocalPlayerSlot();
     this.scene.start("game", {
