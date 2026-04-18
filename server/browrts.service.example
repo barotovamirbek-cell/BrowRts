@@ -8,7 +8,7 @@ User=root
 WorkingDirectory=/root/BrowRts
 Environment=HOST=127.0.0.1
 Environment=PORT=2567
-Environment=PUBLIC_WS_URL=wss://rts-api.example.com
+Environment=PUBLIC_WS_URL=wss://rts-api.132-243-24-25.sslip.io:8443
 ExecStart=/usr/bin/node /root/BrowRts/server/server.js
 Restart=always
 RestartSec=3

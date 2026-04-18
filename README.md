@@ -89,10 +89,16 @@ Default local server address:
 For public deployments the client no longer allows changing the backend URL in-game.
 Set `VITE_MULTIPLAYER_WS_URL` before `npm run build`.
 
+Default public backend for this repo:
+
+```bash
+wss://rts-api.132-243-24-25.sslip.io:8443
+```
+
 Example:
 
 ```bash
-VITE_MULTIPLAYER_WS_URL=wss://rts-api.example.com npm run build
+VITE_MULTIPLAYER_WS_URL=wss://rts-api.132-243-24-25.sslip.io:8443 npm run build
 ```
 
 ## GitHub Pages + VPS
@@ -104,13 +110,12 @@ This repo is now set up for the correct public layout:
 - the client uses one fixed built-in `wss://...` backend URL
 - players cannot change the backend inside the game
 
-To make Pages builds work, set these GitHub repository variables:
+Pages builds already fall back to the public backend above.
+If you want to override it later, set these GitHub repository variables:
 
 - `Settings -> Secrets and variables -> Actions -> Variables`
-- `VITE_MULTIPLAYER_WS_URL = wss://rts-api.example.com`
+- `VITE_MULTIPLAYER_WS_URL = wss://your-backend-domain:8443`
 - `VITE_PLAYFAB_TITLE_ID = your_playfab_title_id`
-
-The Pages workflow now fails fast if `VITE_MULTIPLAYER_WS_URL` is missing.
 
 ## VPS Deploy
 
@@ -126,7 +131,7 @@ Run the single lightweight server process:
 ```bash
 $env:HOST="0.0.0.0"
 $env:PORT="2567"
-$env:PUBLIC_WS_URL="wss://rts-api.example.com"
+$env:PUBLIC_WS_URL="wss://rts-api.132-243-24-25.sslip.io:8443"
 npm start
 ```
 

@@ -4,6 +4,7 @@ import { NetClient } from "../network/Client.js";
 import { loginWithCustomId, updateUserTitleDisplayName } from "../network/PlayFabClient.js";
 
 const ENV = import.meta?.env ?? {};
+const DEFAULT_PUBLIC_WS_URL = "wss://rts-api.132-243-24-25.sslip.io:8443";
 
 function isLoopbackUrl(url) {
   try {
@@ -311,9 +312,9 @@ export class MenuScene extends Phaser.Scene {
     const isVitePreview = ["5173", "4173"].includes(window.location.port);
     const fallbackPort = isVitePreview ? ":2567" : currentPort;
     const fallbackLocal = `${protocol}://${window.location.hostname || "localhost"}${fallbackPort}`;
-    const candidate = configured || (this.isPublicSite ? "" : fallbackLocal);
+    const candidate = configured || (this.isPublicSite ? DEFAULT_PUBLIC_WS_URL : fallbackLocal);
     if (this.isPublicSite && candidate && isLoopbackUrl(candidate)) {
-      return "";
+      return DEFAULT_PUBLIC_WS_URL;
     }
     return candidate;
   }
@@ -324,7 +325,7 @@ export class MenuScene extends Phaser.Scene {
 
   validateServerUrl(url) {
     if (!url) {
-      return this.isPublicSite ? "Build is missing VITE_MULTIPLAYER_WS_URL." : "Backend URL is not configured.";
+      return this.isPublicSite ? "Public backend URL is not configured." : "Backend URL is not configured.";
     }
 
     let parsed;
